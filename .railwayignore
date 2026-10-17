@@ -2,10 +2,14 @@
 .git
 dashboard/node_modules
 dashboard/.next
-data
 .pytest_cache
 __pycache__
 *.pyc
 .env
 data/*.log
 data/*.err.log
+data/gtfs/
+data/completegtfs.zip
+data/screenshots/
+data/geocode_cache.json
+data/4ward.db

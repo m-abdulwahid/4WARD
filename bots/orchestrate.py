@@ -10,8 +10,16 @@ from playwright.async_api import async_playwright
 from .nlp import parse_prompt
 from .profiles import PROFILES
 from .runner import run_bot
+from .steel_client import steel_session
 
 Emit = Callable[[dict], Awaitable[None] | None]
+
+
+async def _emit(cb: Emit | None, ev: dict) -> None:
+    if cb:
+        r = cb(ev)
+        if asyncio.iscoroutine(r):
+            await r
 
 
 async def _warm_up(base_url: str) -> None:
@@ -23,28 +31,46 @@ async def _warm_up(base_url: str) -> None:
         pass  # the bots will report a clear error if the dashboard is really down
 
 
+async def _run_local(keys, user, base_url, emit, max_steps, timeout_s, stream_frames) -> list[dict]:
+    async with async_playwright() as p:
+        browser = await p.chromium.launch()
+        try:
+            return list(await asyncio.gather(*[
+                run_bot(await browser.new_context(viewport={"width": 1000, "height": 640}), k, user, base_url,
+                        emit, max_steps=max_steps, timeout_s=timeout_s, stream_frames=stream_frames)
+                for k in keys]))
+        finally:
+            await browser.close()
+
+
+async def _run_one_steel(key, user, base_url, emit, max_steps, timeout_s, stream_frames) -> dict:
+    # Steel's own session cap must outlast the bot's timeout_s, or Steel kills the session mid-run.
+    async with steel_session(api_timeout_ms=int((timeout_s + 60) * 1000)) as bot:
+        await _emit(emit, {"type": "steel_session", "bot": key, "session_id": bot.id, "live_view_url": bot.live_view_url})
+        return await run_bot(bot.context, key, user, base_url, emit, max_steps=max_steps, timeout_s=timeout_s,
+                             stream_frames=stream_frames)
+
+
+async def _run_steel(keys, user, base_url, emit, max_steps, timeout_s, stream_frames) -> list[dict]:
+    return list(await asyncio.gather(*[
+        _run_one_steel(k, user, base_url, emit, max_steps, timeout_s, stream_frames) for k in keys]))
+
+
 async def run_all(prompt: str, emit: Emit | None = None, base_url: str | None = None, keys: list[str] | None = None,
                   stream_frames: bool = True, max_steps: int = 24, timeout_s: float = 120) -> dict:
     base_url = base_url or os.environ.get("DASHBOARD_URL", "http://localhost:3000")
     t0 = time.time()
     user = await parse_prompt(prompt)
-    if emit:
-        r = emit({"type": "parsed", **user})
-        if asyncio.iscoroutine(r):
-            await r
+    await _emit(emit, {"type": "parsed", **user})
     if not user["origin"] or not user["destination"]:
         return {"error": "Could not find an origin and destination in the prompt.", "parsed": user, "results": []}
     keys = keys or list(PROFILES)
     await _warm_up(base_url)
     backend = os.environ.get("BROWSER_BACKEND", "local").lower()
-    if backend != "local":
-        raise NotImplementedError(f"BROWSER_BACKEND={backend!r} is not built yet (Phase 5); use BROWSER_BACKEND=local")
-    async with async_playwright() as p:
-        browser = await p.chromium.launch()
-        try:
-            results = await asyncio.gather(*[
-                run_bot(browser, k, user, base_url, emit, max_steps=max_steps, timeout_s=timeout_s, stream_frames=stream_frames)
-                for k in keys])
-        finally:
-            await browser.close()
-    return {"parsed": user, "results": list(results), "elapsed_s": round(time.time() - t0, 1)}
+    if backend == "local":
+        results = await _run_local(keys, user, base_url, emit, max_steps, timeout_s, stream_frames)
+    elif backend == "steel":
+        results = await _run_steel(keys, user, base_url, emit, max_steps, timeout_s, stream_frames)
+    else:
+        raise NotImplementedError(f"BROWSER_BACKEND={backend!r} is not supported; use local or steel")
+    return {"parsed": user, "results": results, "elapsed_s": round(time.time() - t0, 1)}
