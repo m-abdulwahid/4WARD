@@ -61,10 +61,10 @@ function Place({ id, label, value, onChange }: { id: string; label: string; valu
         onChange={(e) => onChange(e.target.value)}
         autoComplete="off"
         placeholder="e.g. Union Station or an address"
-        className="mt-1 w-full rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm text-zinc-900"
+        className="mt-1 w-full rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
       />
       {opts.length > 0 && value.toLowerCase() !== opts[0].name.toLowerCase() && (
-        <ul data-testid={`${id}-suggestions`} className="absolute z-10 mt-1 w-full rounded border bg-white shadow">
+        <ul data-testid={`${id}-suggestions`} className="absolute z-10 mt-1 w-full overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-lg">
           {opts.map((o, i) => (
             <li key={o.name}>
               <button
@@ -87,10 +87,10 @@ function Place({ id, label, value, onChange }: { id: string; label: string; valu
 }
 
 const BOT_BADGE: Record<string, { name: string; color: string }> = {
-  cheap: { name: "Cheapest bot", color: "#16a34a" },
-  fastest: { name: "Fastest bot", color: "#dc2626" },
-  green: { name: "Greenest bot", color: "#0d9488" },
-  best: { name: "Best-overall bot", color: "#7c3aed" },
+  cheap: { name: "Economic bot", color: "#b45309" },
+  fastest: { name: "Efficient bot", color: "#dc2626" },
+  green: { name: "Environmental bot", color: "#047857" },
+  best: { name: "Best overall bot", color: "#7c3aed" },
 };
 
 export default function Planner() {
@@ -156,10 +156,10 @@ export default function Planner() {
 
   return (
     <div className="flex h-screen w-screen flex-col bg-zinc-100 text-zinc-900 md:flex-row" data-testid="planner">
-      <aside className="flex w-full flex-col gap-3 overflow-y-auto bg-white p-4 md:w-[26rem]">
-        <h1 className="text-lg font-bold">4WARD route planner</h1>
+      <aside className="flex w-full flex-col gap-3 overflow-y-auto bg-white p-5 shadow-lg md:z-10 md:w-[26rem]">
+        <h1 className="text-lg font-semibold tracking-tight">4WARD route planner</h1>
         {bot && BOT_BADGE[bot] && (
-          <p data-testid="bot-badge" className="rounded px-2 py-1 text-xs font-semibold text-white" style={{ background: BOT_BADGE[bot].color }}>
+          <p data-testid="bot-badge" className="rounded-full px-3 py-1 text-xs font-semibold text-white" style={{ background: BOT_BADGE[bot].color }}>
             Driven by: {BOT_BADGE[bot].name}
           </p>
         )}
@@ -176,7 +176,7 @@ export default function Planner() {
                 data-testid={`mode-toggle-${m}`}
                 aria-pressed={c.modes.includes(m)}
                 onClick={() => toggleMode(m)}
-                className={`rounded-full border px-3 py-1 text-xs ${c.modes.includes(m) ? "border-blue-600 bg-blue-600 text-white" : "border-zinc-300 bg-white text-zinc-700"}`}
+                className={`rounded-full border px-3 py-1 text-xs ${c.modes.includes(m) ? "border-zinc-900 bg-zinc-900 text-white" : "border-zinc-200 bg-white text-zinc-700"}`}
               >
                 {MODE_LABEL[m]}
               </button>
@@ -194,7 +194,7 @@ export default function Planner() {
                 data-testid={`toggle-${k}`}
                 aria-pressed={Boolean(c[k])}
                 onClick={() => setC((p) => ({ ...p, [k]: !p[k] }))}
-                className={`rounded-full border px-3 py-1 text-xs ${c[k] ? "border-emerald-600 bg-emerald-600 text-white" : "border-zinc-300 bg-white text-zinc-700"}`}
+                className={`rounded-full border px-3 py-1 text-xs ${c[k] ? "border-emerald-700 bg-emerald-700 text-white" : "border-zinc-200 bg-white text-zinc-700"}`}
               >
                 {label}
               </button>
@@ -210,7 +210,7 @@ export default function Planner() {
                 max={6}
                 value={c.bags}
                 onChange={(e) => setC((p) => ({ ...p, bags: Number(e.target.value) || 0 }))}
-                className="mt-1 w-full rounded border border-zinc-300 px-2 py-1"
+                className="mt-1 w-full rounded-lg border border-zinc-200 px-2 py-1.5"
               />
             </label>
             <label>
@@ -220,7 +220,7 @@ export default function Planner() {
                 value={c.depart_at ?? ""}
                 placeholder="now"
                 onChange={(e) => setC((p) => ({ ...p, depart_at: e.target.value }))}
-                className="mt-1 w-full rounded border border-zinc-300 px-2 py-1"
+                className="mt-1 w-full rounded-lg border border-zinc-200 px-2 py-1.5"
               />
             </label>
             <label>
@@ -230,7 +230,7 @@ export default function Planner() {
                 value={c.arrive_by ?? ""}
                 placeholder="optional"
                 onChange={(e) => setC((p) => ({ ...p, arrive_by: e.target.value }))}
-                className="mt-1 w-full rounded border border-zinc-300 px-2 py-1"
+                className="mt-1 w-full rounded-lg border border-zinc-200 px-2 py-1.5"
               />
             </label>
           </div>
@@ -241,7 +241,7 @@ export default function Planner() {
           data-testid="compute-route"
           onClick={compute}
           disabled={!origin || !destination || state === "loading"}
-          className="rounded bg-blue-700 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+          className="rounded-full bg-zinc-900 px-3 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
         >
           {state === "loading" ? "Computing…" : "Compute route"}
         </button>
@@ -257,7 +257,7 @@ export default function Planner() {
               key={x.id}
               data-testid={`route-card-${x.id}`}
               data-available={x.available}
-              className={`rounded border p-2 text-sm ${selected === x.id ? "border-blue-600 ring-2 ring-blue-300" : "border-zinc-200"} ${x.available ? "" : "opacity-60"}`}
+              className={`rounded-xl border p-3 text-sm ${selected === x.id ? "border-zinc-900 ring-2 ring-zinc-300" : "border-zinc-200"} ${x.available ? "" : "opacity-60"}`}
             >
               <div className="flex items-center justify-between">
                 <h2 className="flex items-center gap-2 font-semibold">
@@ -269,7 +269,7 @@ export default function Planner() {
                     type="button"
                     data-testid={`select-route-${x.id}`}
                     onClick={() => setSelected(x.id)}
-                    className="rounded border border-blue-600 px-2 py-0.5 text-xs text-blue-700"
+                    className="rounded-full border border-zinc-900 px-2.5 py-0.5 text-xs font-medium text-zinc-900"
                   >
                     {selected === x.id ? "Selected" : "Select"}
                   </button>
@@ -318,7 +318,7 @@ export default function Planner() {
             type="button"
             data-testid="confirm-route"
             onClick={() => setConfirmed(result!.candidates.find((x) => x.id === selected) ?? null)}
-            className="rounded bg-emerald-700 px-3 py-2 text-sm font-semibold text-white"
+            className="rounded-full bg-emerald-700 px-3 py-2.5 text-sm font-semibold text-white"
           >
             Confirm this route
           </button>

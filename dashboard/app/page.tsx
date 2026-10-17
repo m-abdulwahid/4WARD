@@ -2,35 +2,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { API, Candidate, apiHeaders, runWebSocketUrl } from "@/lib/api";
+import { BOTS, BotKey, BotState, blankBots } from "@/lib/bots";
 import InsightsPanel from "@/components/InsightsPanel";
 import LivePanel from "@/components/LivePanel";
+import RouteCard from "@/components/RouteCard";
+import BotDrawer from "@/components/BotDrawer";
+import LayerToggles from "@/components/LayerToggles";
+import MapLegend from "@/components/MapLegend";
+import TripOptions, { Priority } from "@/components/TripOptions";
+import { ModeKey, legColor, legMode } from "@/lib/modes";
+import { DbStatus, TONE, dbLabel } from "@/lib/dataSource";
+import type { BikeStation, MapPadding } from "@/components/RouteMap";
 
 const RouteMap = dynamic(() => import("@/components/RouteMap"), { ssr: false });
-
-const BOTS = [
-  { key: "cheap", name: "Cheapest", color: "#16a34a", blurb: "lowest total cost" },
-  { key: "fastest", name: "Fastest", color: "#dc2626", blurb: "shortest door-to-door time" },
-  { key: "green", name: "Greenest", color: "#0d9488", blurb: "lowest CO₂" },
-  { key: "best", name: "Best overall", color: "#7c3aed", blurb: "balanced trade-offs" },
-] as const;
-type BotKey = (typeof BOTS)[number]["key"];
-
-type BotState = {
-  status: "WAITING" | "SCANNING" | "ROUTING" | "DONE" | "FAILED";
-  frame?: string;
-  lastReason?: string;
-  steps: number;
-  brain?: string;
-  elapsed?: number;
-  route?: Candidate | null;
-  error?: string | null;
-};
-const blank = (): Record<BotKey, BotState> => ({
-  cheap: { status: "WAITING", steps: 0 },
-  fastest: { status: "WAITING", steps: 0 },
-  green: { status: "WAITING", steps: 0 },
-  best: { status: "WAITING", steps: 0 },
-});
 
 const EXAMPLES = [
   "Get me from York University to Union Station by 5pm. I have 2 big bags, no Presto card, but I have my car.",
@@ -38,40 +22,85 @@ const EXAMPLES = [
   "From the Beaches to Pearson Airport, leaving at 7am, I have 2 suitcases and an e-bike.",
 ];
 
-const STATUS_STYLE: Record<string, string> = {
-  WAITING: "bg-zinc-200 text-zinc-700",
-  SCANNING: "bg-amber-100 text-amber-800",
-  ROUTING: "bg-sky-100 text-sky-800",
-  DONE: "bg-emerald-100 text-emerald-800",
-  FAILED: "bg-red-100 text-red-800",
-};
+// Quick-add chips append a phrase the prompt parser already understands (bots/nlp.py).
+// "test" decides whether the prompt already mentions it, so the chip shows as on.
+const QUICK = [
+  { key: "bags", label: "Bags", phrase: "I have 2 bags.", test: /\b(\d+|an?|one|two|three|four)\s+(?:big |large |heavy |carry-on )?(?:bags?|suitcases?|luggage)\b/i },
+  { key: "presto", label: "No Presto card", phrase: "No Presto card.", test: /no presto|without (?:a )?presto|(?:don'?t|do not) have (?:a )?presto/i },
+  { key: "deadline", label: "Deadline", phrase: "I need to arrive by 5pm.", test: /\b(?:by|before|arrive(?: at| by)?)\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b/i },
+  { key: "ebike", label: "E-bike", phrase: "I have an e-bike.", test: /e-?bike/i },
+  { key: "budget", label: "Budget", phrase: "My budget is $10.", test: /budget/i },
+] as const;
 
-function Bar({ label, value, max, color, text }: { label: string; value: number; max: number; color: string; text: string }) {
+// The parser has no budget field, so the dashboard reads it here and flags routes the engine priced above it.
+function readBudget(text: string): number | null {
+  const m = text.match(/budget(?:\s+(?:is|of))?\s*(?:about|around|under)?\s*\$?\s*(\d+(?:\.\d+)?)/i) ?? text.match(/\bunder\s+\$(\d+(?:\.\d+)?)/i);
+  return m ? Number(m[1]) : null;
+}
+
+const TABS = [
+  { key: "map", label: "Map", icon: "M9 4 3 6v14l6-2 6 2 6-2V4l-6 2-6-2Zm0 0v14m6-12v14" },
+  { key: "routes", label: "Routes", icon: "M6 19a2 2 0 1 0 0-4 2 2 0 0 0 0 4Zm12-10a2 2 0 1 0 0-4 2 2 0 0 0 0 4ZM6 15V9a4 4 0 0 1 4-4h4m4 4v6a4 4 0 0 1-4 4h-4" },
+  { key: "insights", label: "Insights", icon: "M4 20V10m6 10V4m6 16v-7m4 7H2" },
+] as const;
+type Tab = (typeof TABS)[number]["key"];
+
+const RAIL_W = 104; // left rail (72px) + gaps
+const PANEL_W: Record<Tab, number> = { map: 400, routes: 400, insights: 600 };
+
+function useWide() {
+  const [wide, setWide] = useState(true);
+  useEffect(() => {
+    const q = window.matchMedia("(min-width: 768px)");
+    const on = () => setWide(q.matches);
+    on();
+    q.addEventListener("change", on);
+    return () => q.removeEventListener("change", on);
+  }, []);
+  return wide;
+}
+
+function Icon({ d }: { d: string }) {
   return (
-    <div className="flex items-center gap-2 text-xs">
-      <span className="w-24 shrink-0 text-zinc-600">{label}</span>
-      <div className="h-4 flex-1 rounded bg-zinc-100">
-        <div className="h-4 rounded" style={{ width: `${Math.max(3, (value / (max || 1)) * 100)}%`, background: color }} />
-      </div>
-      <span className="w-20 shrink-0 text-right tabular-nums text-zinc-800">{text}</span>
-    </div>
+    <svg aria-hidden viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+      <path d={d} />
+    </svg>
   );
 }
 
 export default function Home() {
+  const [tab, setTab] = useState<Tab>("map");
+  const [sheetFull, setSheetFull] = useState(false);
+  const [drawer, setDrawer] = useState(false);
   const [prompt, setPrompt] = useState(EXAMPLES[0]);
-  const [bots, setBots] = useState<Record<BotKey, BotState>>(blank);
+  const [bots, setBots] = useState<Record<BotKey, BotState>>(blankBots);
   const [running, setRunning] = useState(false);
   const [parsed, setParsed] = useState<{ origin: string; destination: string; parser?: string; constraints?: Record<string, unknown> } | null>(null);
   const [error, setError] = useState("");
+  const [focus, setFocus] = useState<BotKey | null>(null);
   const [chosen, setChosen] = useState<BotKey | null>(null);
-  const [health, setHealth] = useState<{ replay: boolean; gemini_configured: boolean } | null>(null);
+  // undefined: still checking; null: backend unreachable
+  const [health, setHealth] = useState<{ replay: boolean; gemini_configured: boolean } | null | undefined>(undefined);
+  const [dbStatus, setDbStatus] = useState<DbStatus | null>(null);
   const [elapsed, setElapsed] = useState(0);
+  const [budget, setBudget] = useState<number | null>(null);
+  const [showTtc, setShowTtc] = useState(false);
+  const [bikeStations, setBikeStations] = useState<BikeStation[] | null>(null);
+  const [insightsSeen, setInsightsSeen] = useState(false);
+  const [priority, setPriority] = useState<Priority>(null);
+  const promptRef = useRef<HTMLTextAreaElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const t0 = useRef(0);
+  const wide = useWide();
+  const closeDrawer = useCallback(() => setDrawer(false), []);
 
   useEffect(() => {
     fetch(`${API}/health`).then((r) => r.json()).then(setHealth).catch(() => setHealth(null));
+    // the chart endpoint reports which database it actually read (Tiger Data or the local fallback)
+    fetch(`${API}/insights/bikes?hours=1`)
+      .then((r) => r.json())
+      .then((d) => setDbStatus({ backend: d.backend, tiger: d.tiger }))
+      .catch(() => setDbStatus(null));
   }, []);
   useEffect(() => {
     if (!running) return;
@@ -85,9 +114,12 @@ export default function Home() {
     wsRef.current?.close();
     setError("");
     setChosen(null);
+    setFocus(null);
     setParsed(null);
-    setBots(blank());
+    setBots(blankBots());
+    setBudget(readBudget(prompt));
     setRunning(true);
+    setTab("routes");
     t0.current = Date.now();
     try {
       const r = await fetch(`${API}/run`, {
@@ -124,193 +156,305 @@ export default function Home() {
   }, [prompt, patch]);
 
   const done = BOTS.filter((b) => bots[b.key].route);
+  const highlight = focus ?? chosen;
+
+  // When the run finishes, open the route that best matches the user's priority (engine numbers only).
+  useEffect(() => {
+    if (running || !priority || focus || chosen) return;
+    const ready = BOTS.filter((b) => bots[b.key].route);
+    if (!ready.length) return;
+    const by = (f: (r: Candidate) => number) => ready.reduce((a, b) => (f(bots[b.key].route!) < f(bots[a.key].route!) ? b : a)).key;
+    const pick: BotKey =
+      priority === "cheapest" ? by((r) => r.cost ?? Infinity)
+      : priority === "fastest" ? by((r) => r.duration_min ?? Infinity)
+      : priority === "greenest" ? by((r) => r.co2_kg ?? Infinity)
+      : priority === "fewest_transfers" ? by((r) => r.transfers ?? Infinity)
+      : by((r) => r.walk_m ?? Infinity);
+    setFocus(pick);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [running]);
   const mapRoutes = useMemo(
     () =>
-      done.map((b) => ({ id: b.key, color: b.color, candidate: bots[b.key].route as Candidate, emphasized: chosen ? chosen === b.key : true })),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [bots, chosen],
+      BOTS.filter((b) => bots[b.key].route).map((b) => ({
+        id: b.key,
+        color: b.color,
+        label: b.name,
+        candidate: bots[b.key].route as Candidate,
+        emphasized: highlight ? highlight === b.key : true,
+      })),
+    [bots, highlight],
   );
+  // Modes the finished routes use, with the colour each is drawn in (TTC line colour for transit).
+  const usedModes = useMemo(() => {
+    const out: Partial<Record<ModeKey, string>> = {};
+    done.forEach((b) => {
+      const c = bots[b.key].route as Candidate;
+      c.legs.forEach((l) => {
+        const m = legMode(l, c.id);
+        out[m] ??= legColor(l, m);
+      });
+    });
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bots]);
   const first = done[0] ? bots[done[0].key].route : null;
-  const maxT = Math.max(...done.map((b) => bots[b.key].route!.duration_min ?? 0), 1);
-  const maxC = Math.max(...done.map((b) => bots[b.key].route!.cost ?? 0), 1);
-  const maxG = Math.max(...done.map((b) => bots[b.key].route!.co2_kg ?? 0), 0.01);
-  const pick = chosen ? bots[chosen].route : null;
+
+  // keep routes inside the part of the map that is not covered by the panel / sheet
+  const mapPadding: MapPadding = wide
+    ? { top: 60, right: 270, bottom: 60, left: RAIL_W + PANEL_W[tab] + 40 } // right: Layers + Legend column (224px + gaps)
+    : { top: 110, right: 30, bottom: typeof window === "undefined" ? 400 : Math.round(window.innerHeight * (sheetFull ? 0.8 : 0.46)) + 110, left: 30 };
+
+  const onTabKey = (e: React.KeyboardEvent, i: number) => {
+    const dir = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 }[e.key];
+    if (!dir) return;
+    e.preventDefault();
+    const next = TABS[(i + dir + TABS.length) % TABS.length].key;
+    setTab(next);
+    if (next === "insights") setInsightsSeen(true);
+    document.getElementById(`tab-${next}`)?.focus();
+  };
+
+  const panelTitle = { map: "Plan a trip", routes: "Four routes", insights: "Insights" }[tab];
 
   return (
-    <div className="min-h-screen bg-zinc-100 text-zinc-900">
-      <header className="bg-zinc-900 px-4 py-3 text-white">
-        <div className="mx-auto flex max-w-[1500px] flex-wrap items-center gap-3">
-          <h1 className="text-xl font-extrabold tracking-tight">
-            4WARD<span className="text-emerald-400">.</span>
-          </h1>
-          <p className="hidden text-sm text-zinc-300 md:block">Four AI bots plan your Toronto trip in parallel. You choose.</p>
-          <div className="ml-auto flex gap-2 text-xs">
-            {health && (
+    <div className="fixed inset-0 overflow-hidden bg-zinc-100 text-zinc-900">
+      <div className="absolute inset-0">
+        <RouteMap
+          routes={mapRoutes}
+          origin={first ? first.legs[0]?.from : null}
+          destination={first ? first.legs[first.legs.length - 1]?.to : null}
+          padding={mapPadding}
+          colorBy="mode"
+          showTtc={showTtc}
+          bikeStations={bikeStations}
+        />
+      </div>
+
+      <div className="absolute top-3 right-3 z-10 flex flex-col items-end gap-2 md:top-4 md:right-4 md:items-stretch">
+        <LayerToggles onTtc={setShowTtc} onBikes={setBikeStations} />
+        <MapLegend found={{ cheap: !!bots.cheap.route, fastest: !!bots.fastest.route, green: !!bots.green.route, best: !!bots.best.route }} highlight={highlight} modes={usedModes} />
+      </div>
+
+      {/* One nav element: bottom tab bar on phones, slim left rail on wide screens */}
+      <nav
+        aria-label="Sections"
+        className="absolute inset-x-0 bottom-0 z-20 flex h-16 items-stretch border-t border-zinc-200 bg-white md:inset-x-auto md:top-4 md:bottom-4 md:left-4 md:h-auto md:w-[72px] md:flex-col md:items-center md:gap-1 md:rounded-2xl md:border-0 md:py-3 md:shadow-lg md:ring-1 md:ring-black/5"
+      >
+        <p className="hidden pb-3 text-base font-extrabold tracking-tight md:block" aria-label="4WARD">
+          4W<span className="text-emerald-600">.</span>
+        </p>
+        <div role="tablist" aria-orientation={wide ? "vertical" : "horizontal"} className="flex flex-1 md:flex-none md:flex-col md:gap-1">
+          {TABS.map((t, i) => {
+            const active = tab === t.key;
+            return (
+              <button
+                key={t.key}
+                id={`tab-${t.key}`}
+                role="tab"
+                type="button"
+                data-testid={`tab-${t.key}`}
+                aria-selected={active}
+                aria-controls={`panel-${t.key}`}
+                tabIndex={active ? 0 : -1}
+                onClick={() => {
+                  setTab(t.key);
+                  if (t.key === "insights") setInsightsSeen(true);
+                }}
+                onKeyDown={(e) => onTabKey(e, i)}
+                className={`relative flex flex-1 flex-col items-center justify-center gap-0.5 text-[11px] font-medium transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-zinc-900 md:h-14 md:w-14 md:flex-none md:rounded-xl ${active ? "text-zinc-900 md:bg-zinc-100" : "text-zinc-500 hover:text-zinc-800"}`}
+              >
+                <Icon d={t.icon} />
+                {t.label}
+                {t.key === "routes" && running && <span aria-hidden className="absolute top-2 right-[calc(50%-18px)] h-2 w-2 rounded-full bg-sky-500 md:top-2 md:right-2" />}
+              </button>
+            );
+          })}
+        </div>
+      </nav>
+
+      {/* Bottom sheet on phones, floating panel on wide screens */}
+      <section
+        aria-label={panelTitle}
+        className="absolute inset-x-0 bottom-16 z-10 flex h-[var(--sheet-h)] flex-col rounded-t-3xl bg-white shadow-[0_-8px_30px_rgba(0,0,0,0.08)] md:inset-x-auto md:top-4 md:bottom-auto md:left-[104px] md:h-auto md:max-h-[calc(100%-2rem)] md:w-[var(--panel-w)] md:rounded-2xl md:shadow-lg md:ring-1 md:ring-black/5"
+        style={{ "--sheet-h": sheetFull ? "calc(100dvh - 7rem)" : "46dvh", "--panel-w": `${PANEL_W[tab]}px` } as React.CSSProperties}
+      >
+        <button
+          type="button"
+          data-testid="sheet-handle"
+          onClick={() => setSheetFull((v) => !v)}
+          aria-label={sheetFull ? "Shrink panel" : "Expand panel"}
+          aria-expanded={sheetFull}
+          className="flex shrink-0 justify-center pt-2 pb-1 md:hidden"
+        >
+          <span aria-hidden className="h-1.5 w-10 rounded-full bg-zinc-300" />
+        </button>
+        <header className="shrink-0 px-4 pt-1 pb-2 md:px-5 md:pt-4">
+          <h1 className="text-lg font-semibold tracking-tight">{panelTitle}</h1>
+          {/* Honest status: where data comes from right now. */}
+          <ul aria-label="Data status" data-testid="data-status" className="mt-1.5 flex flex-wrap gap-1.5 text-[11px] font-medium">
+            {health === undefined ? null : health === null ? (
+              <li className={`rounded-full px-2 py-0.5 ${TONE.warn}`}>Backend offline</li>
+            ) : (
               <>
-                <span className={`rounded px-2 py-1 ${health.gemini_configured ? "bg-emerald-600" : "bg-zinc-700"}`}>
-                  {health.gemini_configured ? "Gemini-driven bots" : "Rule-based bots (no Gemini key)"}
-                </span>
-                <span className={`rounded px-2 py-1 ${health.replay ? "bg-amber-600" : "bg-emerald-700"}`}>{health.replay ? "REPLAY data" : "LIVE data"}</span>
+                <li data-testid="status-data" className={`rounded-full px-2 py-0.5 ${health.replay ? "bg-amber-50 text-amber-900" : TONE.neutral}`}>
+                  {health.replay ? "Replay data" : "Live data"}
+                </li>
+                <li data-testid="status-db" title={dbLabel(dbStatus).long} className={`rounded-full px-2 py-0.5 ${TONE[dbLabel(dbStatus).tone]}`}>
+                  {dbLabel(dbStatus).chip}
+                </li>
+                <li className={`rounded-full px-2 py-0.5 ${health.gemini_configured ? TONE.good : TONE.neutral}`}>
+                  {health.gemini_configured ? "Gemini bots" : "Rule-based bots"}
+                </li>
               </>
             )}
-          </div>
-        </div>
-      </header>
+          </ul>
+        </header>
 
-      <div className="mx-auto max-w-[1500px] p-3 md:p-4">
-        <form
-          className="flex flex-col gap-2 rounded-lg bg-white p-3 shadow-sm"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (!running && prompt.trim()) start();
-          }}
-        >
-          <label htmlFor="prompt" className="text-sm font-medium">
-            Where are you going, and what should we know?
-          </label>
-          <div className="flex flex-col gap-2 md:flex-row">
-            <textarea
-              id="prompt"
-              data-testid="prompt-input"
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              rows={2}
-              className="flex-1 rounded border border-zinc-300 p-2 text-sm"
-            />
-            <button
-              type="submit"
-              data-testid="plan-trip"
-              disabled={running || !prompt.trim()}
-              className="rounded bg-emerald-700 px-6 py-2 text-sm font-semibold text-white disabled:opacity-50 md:w-48"
-            >
-              {running ? `Bots working… ${elapsed}s` : "Plan my trip"}
-            </button>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {EXAMPLES.map((x, i) => (
-              <button key={i} type="button" onClick={() => setPrompt(x)} className="rounded-full border border-zinc-300 px-3 py-1 text-xs text-zinc-700 hover:bg-zinc-50">
-                Example {i + 1}
-              </button>
-            ))}
-          </div>
-          {parsed && (
-            <p className="text-xs text-zinc-600" data-testid="parsed-summary">
-              Understood ({parsed.parser}): <b>{parsed.origin}</b> → <b>{parsed.destination}</b>
-              {parsed.constraints && ` · ${Object.entries(parsed.constraints).filter(([, v]) => v && v !== 0).map(([k, v]) => (v === true ? k.replace("_", " ") : `${k.replace("_", " ")} ${v}`)).join(", ")}`}
-            </p>
-          )}
-          {error && (
-            <p role="alert" className="rounded bg-red-50 p-2 text-sm text-red-800">
-              {error}
-            </p>
-          )}
-        </form>
-
-        <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
-          <section aria-label="Map of all routes" className="h-[420px] overflow-hidden rounded-lg bg-white shadow-sm lg:h-[620px]">
-            <RouteMap
-              routes={mapRoutes}
-              origin={first ? first.legs[0]?.from : null}
-              destination={first ? first.legs[first.legs.length - 1]?.to : null}
-            />
-          </section>
-
-          <section aria-label="Bot live views" className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            {BOTS.map((b) => {
-              const s = bots[b.key];
-              return (
-                <article key={b.key} data-testid={`bot-${b.key}`} className={`flex flex-col overflow-hidden rounded-lg bg-white shadow-sm ring-2 ${chosen === b.key ? "" : "ring-transparent"}`} style={chosen === b.key ? { boxShadow: `0 0 0 3px ${b.color}` } : undefined}>
-                  <div className="flex items-center justify-between px-3 py-2" style={{ borderTop: `4px solid ${b.color}` }}>
-                    <div>
-                      <h2 className="text-sm font-bold">{b.name}</h2>
-                      <p className="text-[11px] text-zinc-500">{b.blurb}</p>
-                    </div>
-                    <span data-testid={`bot-${b.key}-status`} className={`rounded px-2 py-0.5 text-[11px] font-semibold ${STATUS_STYLE[s.status]}`}>
-                      {s.status}
-                    </span>
-                  </div>
-                  <div className="relative aspect-[1000/640] bg-zinc-200">
-                    {s.frame ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={`data:image/jpeg;base64,${s.frame}`} alt={`${b.name} bot's browser view`} className="h-full w-full object-cover" />
-                    ) : (
-                      <div className="flex h-full items-center justify-center text-xs text-zinc-500">{running ? "Starting browser…" : "Waiting for a trip"}</div>
-                    )}
-                  </div>
-                  <div className="px-3 py-2 text-xs">
-                    {s.status === "FAILED" ? (
-                      <p className="text-red-700">Failed: {s.error ?? "unknown error"}. The other bots are unaffected.</p>
-                    ) : s.route ? (
-                      <>
-                        <p className="font-semibold">{s.route.title}</p>
-                        <p className="tabular-nums text-zinc-700">
-                          {Math.round(s.route.duration_min ?? 0)} min · ${(s.route.cost ?? 0).toFixed(2)} · {(s.route.co2_kg ?? 0).toFixed(2)} kg CO₂
-                        </p>
-                        <button type="button" data-testid={`choose-${b.key}`} onClick={() => setChosen(b.key)} className="mt-1 rounded border px-2 py-0.5 text-xs font-medium" style={{ borderColor: b.color, color: b.color }}>
-                          {chosen === b.key ? "Chosen ✓" : "Choose this route"}
-                        </button>
-                      </>
-                    ) : (
-                      <p className="line-clamp-2 text-zinc-600">{s.lastReason ?? (running ? "Thinking…" : "Idle")}</p>
-                    )}
-                  </div>
-                </article>
-              );
-            })}
-          </section>
-        </div>
-
-        {done.length > 0 && (
-          <section aria-label="Comparison" className="mt-3 grid gap-3 lg:grid-cols-2">
-            <div className="rounded-lg bg-white p-3 shadow-sm">
-              <h2 className="mb-2 text-sm font-bold">Side by side</h2>
-              {(
-                [
-                  ["Time", maxT, (r: Candidate) => r.duration_min ?? 0, (v: number) => `${Math.round(v)} min`],
-                  ["Cost", maxC, (r: Candidate) => r.cost ?? 0, (v: number) => `$${v.toFixed(2)}`],
-                  ["CO₂", maxG, (r: Candidate) => r.co2_kg ?? 0, (v: number) => `${v.toFixed(2)} kg`],
-                ] as const
-              ).map(([label, max, get, fmt]) => (
-                <div key={label} className="mb-3">
-                  <h3 className="mb-1 text-xs font-semibold text-zinc-500">{label}</h3>
-                  <div className="flex flex-col gap-1">
-                    {done.map((b) => (
-                      <Bar key={b.key} label={b.name} value={get(bots[b.key].route!)} max={max} color={b.color} text={fmt(get(bots[b.key].route!))} />
-                    ))}
-                  </div>
-                </div>
-              ))}
-              <p className="text-[11px] text-zinc-500">Costs and traffic are estimates from assumptions shown in the planner; transit schedule data is from TTC GTFS.</p>
-            </div>
-            <div className="rounded-lg bg-white p-3 shadow-sm">
-              <h2 className="mb-2 text-sm font-bold">{pick ? `Your pick: ${pick.title}` : "Pick a route to see the itinerary"}</h2>
-              {pick ? (
-                <ol className="flex flex-col gap-1 text-sm" data-testid="itinerary">
-                  {pick.legs.map((l, i) => (
-                    <li key={i} className="flex gap-2">
-                      <span className="w-14 shrink-0 text-right tabular-nums text-zinc-500">{Math.round(l.duration_s / 60)} min</span>
-                      <span>
-                        {l.label}
-                        {l.cost ? <span className="text-zinc-500"> · ${l.cost.toFixed(2)}</span> : null}
-                      </span>
-                    </li>
-                  ))}
-                  {pick.notes?.map((n) => (
-                    <li key={n} className="mt-1 text-xs text-zinc-500">
-                      • {n}
-                    </li>
-                  ))}
-                </ol>
-              ) : (
-                <p className="text-sm text-zinc-500">Each bot's route is drawn in its colour on the map. Choose one to highlight it.</p>
+        {/* MAP tab */}
+        <div id="panel-map" role="tabpanel" aria-labelledby="tab-map" hidden={tab !== "map"} className="flex min-h-0 flex-1 flex-col">
+          <form
+            className="flex min-h-0 flex-1 flex-col"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!running && prompt.trim()) start();
+            }}
+          >
+            <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 pb-3 md:px-5">
+              <label htmlFor="prompt" className="text-sm font-medium text-zinc-700">
+                Where are we going, and what should we know?
+              </label>
+              <textarea
+                ref={promptRef}
+                id="prompt"
+                data-testid="prompt-input"
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                rows={4}
+                className="w-full shrink-0 resize-none rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-sm leading-relaxed focus:border-zinc-400 focus:bg-white focus:outline-none"
+              />
+              <div role="group" aria-label="Quick add" className="flex flex-wrap gap-2">
+                {QUICK.map((q) => {
+                  const on = q.test.test(prompt);
+                  return (
+                    <button
+                      key={q.key}
+                      type="button"
+                      data-testid={`quick-${q.key}`}
+                      aria-pressed={on}
+                      onClick={() => {
+                        if (!on) setPrompt((p) => `${p.trim()} ${q.phrase}`.trim());
+                        else if (prompt.includes(q.phrase)) setPrompt((p) => p.replace(q.phrase, "").replace(/\s{2,}/g, " ").trim());
+                        else promptRef.current?.focus(); // mentioned in the user's own words: edit the text to change it
+                      }}
+                      className={`rounded-full px-3 py-1.5 text-xs font-medium ring-1 transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-900 ${on ? "bg-zinc-900 text-white ring-zinc-900" : "bg-white text-zinc-700 ring-zinc-200 hover:bg-zinc-50"}`}
+                    >
+                      {on ? "✓ " : "+ "}
+                      {q.label}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs text-zinc-500">Try:</span>
+                {EXAMPLES.map((x, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    data-testid={`example-${i}`}
+                    onClick={() => setPrompt(x)}
+                    className="rounded-full bg-zinc-100 px-3 py-1 text-xs font-medium text-zinc-700 transition-colors duration-150 hover:bg-zinc-200 focus-visible:outline-2 focus-visible:outline-zinc-900"
+                  >
+                    Example {i + 1}
+                  </button>
+                ))}
+              </div>
+              <TripOptions prompt={prompt} setPrompt={setPrompt} focusPrompt={() => promptRef.current?.focus()} priority={priority} setPriority={setPriority} />
+              {error && (
+                <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-800">
+                  {error}
+                </p>
               )}
             </div>
-          </section>
-        )}
+            <div className="shrink-0 border-t border-zinc-100 px-4 py-3 md:px-5">
+              <button
+                type="submit"
+                data-testid="plan-trip"
+                disabled={running || !prompt.trim()}
+                className="w-full rounded-full bg-zinc-900 px-6 py-3 text-sm font-semibold text-white transition-colors duration-150 hover:bg-zinc-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-900 disabled:opacity-50"
+              >
+                {running ? `Bots working… ${elapsed}s` : "Plan my trip"}
+              </button>
+            </div>
+          </form>
+        </div>
 
-        <LivePanel />
-        <InsightsPanel />
-      </div>
+        {/* ROUTES tab */}
+        <div id="panel-routes" role="tabpanel" aria-labelledby="tab-routes" hidden={tab !== "routes"} className="flex min-h-0 flex-1 flex-col">
+          <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 pb-3 md:px-5">
+            {parsed && (
+              <p className="rounded-xl bg-zinc-50 p-3 text-xs text-zinc-600" data-testid="parsed-summary">
+                Understood ({parsed.parser}): <b className="text-zinc-900">{parsed.origin}</b> to <b className="text-zinc-900">{parsed.destination}</b>
+                {parsed.constraints &&
+                  ` · ${Object.entries(parsed.constraints)
+                    .filter(([, v]) => v && v !== 0)
+                    .map(([k, v]) => (v === true ? k.replace("_", " ") : `${k.replace("_", " ")} ${v}`))
+                    .join(", ")}`}
+              </p>
+            )}
+            {running && <p className="text-xs text-zinc-500" role="status">Bots working… {elapsed}s</p>}
+            {error && (
+              <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-800">
+                {error}
+              </p>
+            )}
+            {!running && !parsed && !error && (
+              <p className="rounded-xl bg-zinc-50 p-4 text-sm text-zinc-600">Plan a trip on the Map tab. Four bots will each find a route with a different goal.</p>
+            )}
+            {BOTS.map((b) => (
+              <RouteCard
+                key={b.key}
+                bot={b}
+                state={bots[b.key]}
+                running={running}
+                budget={budget}
+                focused={focus === b.key}
+                chosen={chosen === b.key}
+                onFocus={() => setFocus((f) => (f === b.key ? null : b.key))}
+                onChoose={() => {
+                  setChosen(b.key);
+                  setFocus(b.key);
+                }}
+              />
+            ))}
+            <p className="text-[11px] leading-relaxed text-zinc-500">
+              Numbers come from the routing engine, not the AI. Transit fares follow TTC rules; driving, parking, rideshare costs and traffic are estimated. Transit schedule data is from TTC GTFS.
+            </p>
+          </div>
+          <div className="shrink-0 border-t border-zinc-100 px-4 py-3 md:px-5">
+            <button
+              type="button"
+              data-testid="watch-bots"
+              aria-expanded={drawer}
+              onClick={() => setDrawer((v) => !v)}
+              className="w-full rounded-full bg-zinc-100 px-6 py-2.5 text-sm font-semibold text-zinc-900 transition-colors duration-150 hover:bg-zinc-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-900"
+            >
+              {drawer ? "Hide the bots" : "Watch the bots"}
+            </button>
+          </div>
+        </div>
+
+        {/* INSIGHTS tab */}
+        <div id="panel-insights" role="tabpanel" aria-labelledby="tab-insights" hidden={tab !== "insights"} className="min-h-0 flex-1 overflow-y-auto px-4 pb-4 md:px-5">
+          {insightsSeen && (
+            <>
+              <LivePanel />
+              <InsightsPanel />
+            </>
+          )}
+        </div>
+      </section>
+
+      {drawer && <BotDrawer bots={bots} running={running} onClose={closeDrawer} />}
     </div>
   );
 }

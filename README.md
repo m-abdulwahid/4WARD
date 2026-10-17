@@ -1,8 +1,17 @@
 # 4WARD
 
 Type a Toronto trip in plain language. Four Playwright bots, each driven by Gemini and each chasing a different
-objective (cheapest, fastest, greenest, best overall), operate our own map dashboard in parallel and each build a
-route. You see all four side by side and pick one.
+objective, operate our own map dashboard in parallel and each build a route. You see all four side by side and pick one.
+
+| Bot (shown as) | Internal key | Goal |
+|---|---|---|
+| Economic | `cheap` | Lowest total cost: fares with Presto rules, parking, gas, bike fees |
+| Efficient | `fastest` | Shortest door to door time |
+| Environmental | `green` | Lowest kg CO2e |
+| Best overall | `best` | Balanced trade-offs: time, cost, emissions, transfers, walking, bags |
+
+Internal keys are used by the backend, the bots and every `data-testid` (`bot-cheap`, `choose-fastest`, ...). Only the
+display names changed; never rename the keys.
 
 ## Run it
 

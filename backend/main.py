@@ -1,5 +1,6 @@
 """4WARD FastAPI backend: health, geocode, assumptions, route planning. Bot orchestration lives in /run (see orchestrator)."""
 import os
+import time
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -13,7 +14,7 @@ from pydantic import BaseModel
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 from . import bikeshare, geo, ingest, planner, runs  # noqa: E402
-from .db import store  # noqa: E402
+from .db import Store, store  # noqa: E402
 from .config import ASSUMPTIONS, EMISSIONS_G_PER_KM, SPEEDS_KMH  # noqa: E402
 from .security import BotTokenMiddleware, RateLimitMiddleware, cors_origins  # noqa: E402
 
@@ -162,16 +163,41 @@ async def ws_run(ws: WebSocket, rid: str):
         run["subs"].discard(q)
 
 
+_local: Store | None = None
+_tiger_down_until = 0.0
+
+
+def _insights(kind: str, hours: int, top: int) -> dict:
+    """Chart data from Tiger Data. If it is configured but unreachable, read local SQLite instead of failing,
+    and skip Tiger Data for 60 s so each request does not wait on a dead connection."""
+    global _local, _tiger_down_until
+
+    def read(db: Store) -> dict:
+        rows = db.ttc_hourly(hours, top) if kind == "ttc" else db.bikes_hourly(hours)
+        table = "ttc_route_snapshot" if kind == "ttc" else "bike_system_snapshot"
+        return {"backend": db.backend, "sources": db.sources(hours).get(table, {}), "rows": rows}
+
+    if store.pg and time.time() >= _tiger_down_until:
+        try:
+            return {**read(store), "tiger": "connected"}
+        except Exception:
+            _tiger_down_until = time.time() + 60
+    if not store.pg:
+        return {**read(store), "tiger": "replay" if store.url else "not configured"}
+    if _local is None:
+        _local = Store()
+        _local.pg, _local.backend = False, "sqlite-local"
+    return {**read(_local), "tiger": "unreachable"}
+
+
 @app.get("/insights/ttc")
 async def insights_ttc(hours: int = 24, top: int = 6):
-    rows = await asyncio.to_thread(store.ttc_hourly, hours, top)
-    return {"backend": store.backend, "sources": (await asyncio.to_thread(store.sources, hours)).get("ttc_route_snapshot", {}), "rows": rows}
+    return await asyncio.to_thread(_insights, "ttc", hours, top)
 
 
 @app.get("/insights/bikes")
 async def insights_bikes(hours: int = 24):
-    rows = await asyncio.to_thread(store.bikes_hourly, hours)
-    return {"backend": store.backend, "sources": (await asyncio.to_thread(store.sources, hours)).get("bike_system_snapshot", {}), "rows": rows}
+    return await asyncio.to_thread(_insights, "bikes", hours, 0)
 
 
 @app.get("/live")
