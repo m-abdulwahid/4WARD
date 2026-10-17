@@ -2,7 +2,7 @@
 import type { BotKey, BotState } from "@/lib/bots";
 import { STATUS_CHIP } from "@/lib/bots";
 
-type Bot = { key: BotKey; name: string; color: string; blurb: string };
+type Bot = { key: BotKey; name: string; short: string; color: string; blurb: string };
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
@@ -60,7 +60,11 @@ export default function RouteCard({
           <div className="flex min-w-0 items-center gap-2">
             <span aria-hidden className="h-3 w-3 shrink-0 rounded-full" style={{ background: bot.color }} />
             <div className="min-w-0">
-              <h3 className="text-sm font-semibold text-zinc-900">{bot.name}</h3>
+              <h3 className="truncate text-sm font-semibold text-zinc-900">
+                {/* full name unless the phone is very narrow */}
+                <span className="min-[380px]:hidden">{bot.short}</span>
+                <span className="hidden min-[380px]:inline">{bot.name}</span>
+              </h3>
               <p className="truncate text-xs text-zinc-500">{r ? r.title : bot.blurb}</p>
             </div>
           </div>

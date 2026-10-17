@@ -1,11 +1,13 @@
 import type { Candidate } from "@/lib/api";
 
 // One accent colour per bot. Darker shades so white text on them stays readable (>= 4.5:1).
+// Keys are internal (bots, backend, data-testids use them); only name/short/blurb are shown.
+// "short" is used where space is tight (narrow phones).
 export const BOTS = [
-  { key: "cheap", name: "Cheapest", color: "#b45309", blurb: "Lowest total cost" },
-  { key: "fastest", name: "Fastest", color: "#dc2626", blurb: "Shortest door to door time" },
-  { key: "green", name: "Greenest", color: "#047857", blurb: "Lowest CO₂" },
-  { key: "best", name: "Best overall", color: "#7c3aed", blurb: "Balanced trade-offs" },
+  { key: "cheap", name: "Economic", short: "Economic", color: "#b45309", blurb: "Lowest total cost" },
+  { key: "fastest", name: "Efficient", short: "Efficient", color: "#dc2626", blurb: "Shortest door to door time" },
+  { key: "green", name: "Environmentally friendly", short: "Eco", color: "#047857", blurb: "Lowest CO₂" },
+  { key: "best", name: "Best overall", short: "Best overall", color: "#7c3aed", blurb: "Balanced trade-offs" },
 ] as const;
 export type BotKey = (typeof BOTS)[number]["key"];
 

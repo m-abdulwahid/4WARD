@@ -55,12 +55,14 @@ FastAPI orchestrator --asyncio.gather--> 4 bots, each in its own Steel session (
 
 All four get the same constraints JSON and the same dashboard. Each has a goal and a status (SCANNING, ROUTING, DONE, FAILED).
 
-1. Cheapest: lowest total cost (fares with Presto rules, parking, gas, bike fees).
-2. Fastest: lowest door to door time.
-3. Greenest: lowest kg CO2e.
-4. Most reliable: highest chance of making the deadline, from Tiger Data history.
+Display names (UI and docs) with the internal key in brackets. Keys are used by the backend, bots and every `data-testid`; never rename them.
 
-"Best overall" is NOT a bot. It is a badge the engine puts on one of the four results using a weighted score the user can adjust with sliders.
+1. Economic (`cheap`): lowest total cost (fares with Presto rules, parking, gas, bike fees).
+2. Efficient (`fastest`): shortest door to door time.
+3. Environmentally friendly (`green`, "Eco" where space is tight): lowest kg CO2e.
+4. Best overall (`best`): balanced trade-offs between time, cost, emissions, transfers, walking, and bags.
+
+Idea for later: a "Most reliable" goal (highest chance of making the deadline, from Tiger Data delay history).
 
 ## How bots work
 
