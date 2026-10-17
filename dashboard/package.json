@@ -8,7 +8,8 @@
     "dev": "next dev",
     "prebuild": "node scripts/build-ttc-geojson.mjs",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "test:time": "node --test scripts/test-time-parse.mjs"
   },
   "dependencies": {
     "maplibre-gl": "^6.14.0",

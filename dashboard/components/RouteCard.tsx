@@ -29,6 +29,7 @@ export default function RouteCard({
   state,
   running,
   budget = null,
+  deadlineNote = null,
   focused,
   chosen,
   onFocus,
@@ -38,6 +39,7 @@ export default function RouteCard({
   state: BotState;
   running: boolean;
   budget?: number | null; // from the user's prompt; compared against the engine's cost
+  deadlineNote?: string | null; // replaces the deadline verdict when the engine cannot judge it (deadline tomorrow)
   focused: boolean;
   chosen: boolean;
   onFocus: () => void;
@@ -108,7 +110,9 @@ export default function RouteCard({
             <div className="mb-3 border-t border-zinc-100 pt-3">
               <p className="text-xs text-zinc-600">
                 {r.depart} to {r.arrive} · walk {r.walk_m} m
-                {r.meets_deadline !== undefined && (r.meets_deadline ? " · makes your deadline" : ` · misses your deadline (leave by ${r.leave_by})`)}
+                {deadlineNote
+                  ? ` · ${deadlineNote}`
+                  : r.meets_deadline !== undefined && (r.meets_deadline ? " · makes your deadline" : ` · misses your deadline (leave by ${r.leave_by})`)}
               </p>
               <ol className="mt-2 flex flex-col text-sm" data-testid={chosen ? "itinerary" : `itinerary-${bot.key}`}>
                 {r.legs.map((l, i) => {

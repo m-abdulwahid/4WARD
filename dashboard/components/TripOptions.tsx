@@ -1,5 +1,7 @@
 "use client";
 import { useState } from "react";
+import TimeField from "@/components/TimeField";
+import { ParsedTime, TimeKind, parseTime, timeInPrompt } from "@/lib/timeParse";
 
 // Option cards under the trip box. Every card writes a phrase the prompt parser (bots/nlp.py) already understands,
 // so the prompt text stays the single source of truth. Options with no backend support are shown as such.
@@ -7,7 +9,6 @@ import { useState } from "react";
 export type Priority = "cheapest" | "fastest" | "greenest" | "fewest_transfers" | "least_walking" | null;
 
 const BAGS = /\b(\d+|an?|one|two|three|four)\s+(?:big |large |heavy |carry-on )?(?:bags?|suitcases?|luggage)\b/i;
-const DEADLINE = /\b(by|before|arrive(?: at| by)?)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i;
 const WORDS: Record<string, number> = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4 };
 
 type Toggle = { key: string; label: string; phrase: string; test: RegExp; note?: string };
@@ -47,25 +48,6 @@ const PRIORITIES: { key: Exclude<Priority, null>; label: string }[] = [
 ];
 
 const tidy = (s: string) => s.replace(/\s+([.,])/g, "$1").replace(/\s{2,}/g, " ").trim();
-
-function to12h(hhmm: string): string {
-  const [h, m] = hhmm.split(":").map(Number);
-  const suffix = h >= 12 ? "pm" : "am";
-  const h12 = h % 12 || 12;
-  return m ? `${h12}:${String(m).padStart(2, "0")}${suffix}` : `${h12}${suffix}`;
-}
-
-/** The deadline already in the prompt as HH:MM (24 h), read the same way as bots/nlp.py _clock (no am/pm = 24 h). */
-function readDeadline(prompt: string): string {
-  const m = prompt.match(DEADLINE);
-  if (!m) return "";
-  let h = Number(m[2]);
-  const min = Number(m[3] ?? 0);
-  const ap = m[4]?.toLowerCase();
-  if (ap === "pm" && h < 12) h += 12;
-  if (ap === "am" && h === 12) h = 0;
-  return h < 24 ? `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}` : "";
-}
 
 function Group({ id, title, summary, open, onToggle, children }: { id: string; title: string; summary: string; open: boolean; onToggle: () => void; children: React.ReactNode }) {
   return (
@@ -122,12 +104,20 @@ export default function TripOptions({
   focusPrompt,
   priority,
   setPriority,
+  deadlineText,
+  setDeadlineText,
+  leaveText,
+  setLeaveText,
 }: {
   prompt: string;
   setPrompt: (f: (p: string) => string) => void;
   focusPrompt: () => void;
   priority: Priority;
   setPriority: (p: Priority) => void;
+  deadlineText: string;
+  setDeadlineText: (t: string) => void;
+  leaveText: string;
+  setLeaveText: (t: string) => void;
 }) {
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const flip = (k: string) => setOpen((o) => ({ ...o, [k]: !o[k] }));
@@ -150,15 +140,24 @@ export default function TripOptions({
     setPrompt((p) => (BAGS.test(p) ? p.replace(BAGS, words) : tidy(`${p} I have ${words}.`)));
   };
 
-  const deadline = readDeadline(prompt);
-  const setDeadline = (hhmm: string) => {
-    if (!hhmm) {
-      setPrompt((p) => tidy(p.replace(/I need to arrive by [^.]*\./, "").replace(DEADLINE, "")));
-      return;
-    }
-    const t = to12h(hhmm);
-    setPrompt((p) => (DEADLINE.test(p) ? p.replace(DEADLINE, (_m, w: string) => `${w} ${t}`) : tidy(`${p} I need to arrive by ${t}.`)));
+  // Times: the typed field wins over the trip text; say so whenever they differ.
+  const fieldTime = (text: string) => (text.trim() ? parseTime(text) : null);
+  const deadlineP = fieldTime(deadlineText);
+  const leaveP = fieldTime(leaveText);
+  const note = (kind: TimeKind, text: string, p: ParsedTime | null) => {
+    const said = timeInPrompt(prompt, kind);
+    if (!text.trim()) return said ? <p className="text-zinc-600">Your trip text says {said.label}. Type here to change it.</p> : null;
+    if (!p || (said && said.hhmm === p.hhmm)) return null;
+    return (
+      <p className="text-amber-900">
+        {said ? <>Your trip text says {said.label}.</> : <>Your trip text no longer mentions this time.</>} This field wins: Plan my trip uses {p.label}.
+      </p>
+    );
   };
+  const textDeadline = timeInPrompt(prompt, "deadline");
+  const timeSummary =
+    [deadlineP && `Arrive by ${deadlineP.label}`, leaveP && `Leave at ${leaveP.label}`].filter(Boolean).join(", ") ||
+    (textDeadline ? `Arrive by ${textDeadline.label} (from text)` : "Optional");
 
   const travelOn = TRAVEL.filter((t) => t.test.test(prompt)).length;
   const situationOn = SITUATION.filter((t) => t.test.test(prompt)).length + (bags ? 1 : 0);
@@ -210,23 +209,38 @@ export default function TripOptions({
         </div>
       </Group>
 
-      <Group id="deadline" title="Deadline" summary={deadline ? `Arrive by ${to12h(deadline)}` : "Optional"} open={!!open.deadline} onToggle={() => flip("deadline")}>
-        <div className="flex items-end gap-2">
-          <label className="flex flex-1 flex-col gap-1 text-xs font-medium text-zinc-700">
-            Arrive by
-            <input
-              type="time"
-              data-testid="option-arrive-by"
-              value={deadline}
-              onChange={(e) => setDeadline(e.target.value)}
-              className="rounded-lg border border-zinc-200 bg-zinc-50 px-2 py-1.5 text-sm text-zinc-900 focus:border-zinc-400 focus:bg-white focus:outline-none"
-            />
-          </label>
-          {deadline && (
-            <button type="button" data-testid="option-arrive-by-clear" onClick={() => setDeadline("")} className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-zinc-700 ring-1 ring-zinc-200 hover:bg-zinc-50 focus-visible:outline-2 focus-visible:outline-zinc-900">
-              Clear
-            </button>
-          )}
+      <Group id="deadline" title="Deadline and leave time" summary={timeSummary} open={!!open.deadline} onToggle={() => flip("deadline")}>
+        <div className="flex flex-col gap-3">
+          <TimeField
+            id="deadline-field"
+            label="Arrive by"
+            text={deadlineText}
+            setText={setDeadlineText}
+            testid="deadline-input"
+            pickerTestid="option-arrive-by"
+            clearTestid="option-arrive-by-clear"
+            extraNote={
+              <>
+                {note("deadline", deadlineText, deadlineP)}
+                {deadlineP?.tomorrow && !leaveP?.tomorrow && (
+                  <p className="text-amber-900">
+                    4WARD checks deadlines against today&rsquo;s clock, so the route cards will skip &ldquo;makes your deadline&rdquo; for a deadline tomorrow. Set a leave time tomorrow too to get that check.
+                  </p>
+                )}
+              </>
+            }
+          />
+          <TimeField
+            id="leave-field"
+            label="Leave at"
+            text={leaveText}
+            setText={setLeaveText}
+            testid="leave-at-input"
+            pickerTestid="leave-at-picker"
+            clearTestid="leave-at-clear"
+            extraNote={note("leave", leaveText, leaveP)}
+          />
+          <p className="text-[11px] leading-snug text-zinc-500">Leave blank to leave now. Times are Toronto local time.</p>
         </div>
       </Group>
     </div>

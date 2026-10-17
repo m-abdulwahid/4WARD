@@ -10,6 +10,13 @@ import LayerToggles from "@/components/LayerToggles";
 import MapLegend from "@/components/MapLegend";
 import TripOptions, { Priority } from "@/components/TripOptions";
 import ExampleTrips from "@/components/ExampleTrips";
+import { TimeKind, parseTime, writeTimeToPrompt } from "@/lib/timeParse";
+
+// A time followed by "tomorrow" in the final trip text (the fields write it that way).
+const TOMORROW = {
+  deadline: /\b(?:by|before|arrive(?: at| by)?)\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s+tomorrow\b/i,
+  leave: /\b(?:leave|leaving|depart(?:ing)?|starting)\s+(?:at\s+)?\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s+tomorrow\b/i,
+};
 import { ModeKey, legColor, legMode } from "@/lib/modes";
 import { DbStatus, TONE, dbLabel } from "@/lib/dataSource";
 import type { BikeStation, MapPadding } from "@/components/RouteMap";
@@ -80,6 +87,10 @@ export default function Home() {
   const [sheetFull, setSheetFull] = useState(false);
   const [drawer, setDrawer] = useState(false);
   const [prompt, setPrompt] = useState("");
+  // typed time fields (they win over any time in the trip text)
+  const [deadlineText, setDeadlineText] = useState("");
+  const [leaveText, setLeaveText] = useState("");
+  const [deadlineNote, setDeadlineNote] = useState<string | null>(null);
   // what each typed place was matched to (the geocoder only searches inside Toronto)
   const [places, setPlaces] = useState<{ origin: Place; destination: Place } | null>(null);
   const [bots, setBots] = useState<Record<BotKey, BotState>>(blankBots);
@@ -117,6 +128,25 @@ export default function Home() {
     return () => clearInterval(i);
   }, [running]);
 
+  // Typing a valid time writes it into the trip text; clearing the field takes it out again.
+  const typeTime = (kind: TimeKind, text: string) => {
+    const prev = kind === "deadline" ? deadlineText : leaveText;
+    (kind === "deadline" ? setDeadlineText : setLeaveText)(text);
+    const p = text.trim() ? parseTime(text) : null;
+    if (p) setPrompt((x) => writeTimeToPrompt(x, kind, p));
+    else if (!text.trim() && prev.trim()) setPrompt((x) => writeTimeToPrompt(x, kind, null));
+  };
+  const badTime = (deadlineText.trim() && !parseTime(deadlineText)) || (leaveText.trim() && !parseTime(leaveText));
+  // On Plan my trip the fields win: apply them once more in case the trip text was edited afterwards.
+  const finalPrompt = () => {
+    let t = prompt;
+    for (const [kind, text] of [["deadline", deadlineText], ["leave", leaveText]] as const) {
+      const p = text.trim() ? parseTime(text) : null;
+      if (p) t = writeTimeToPrompt(t, kind, p);
+    }
+    return t;
+  };
+
   const backToPrompt = () => {
     setTab("map");
     setTimeout(() => promptRef.current?.focus(), 50);
@@ -134,7 +164,7 @@ export default function Home() {
 
   const patch = useCallback((k: BotKey, p: Partial<BotState>) => setBots((b) => ({ ...b, [k]: { ...b[k], ...p } })), []);
 
-  const start = useCallback(async () => {
+  const start = useCallback(async (text: string = prompt) => {
     wsRef.current?.close();
     setError("");
     setChosen(null);
@@ -142,12 +172,18 @@ export default function Home() {
     setParsed(null);
     setPlaces(null);
     setBots(blankBots());
-    setBudget(readBudget(prompt));
+    setBudget(readBudget(text));
+    // The backend compares deadlines with today's clock: a deadline tomorrow (without leaving tomorrow) cannot be checked.
+    setDeadlineNote(
+      TOMORROW.deadline.test(text) && !TOMORROW.leave.test(text)
+        ? "Your deadline is tomorrow. 4WARD checks deadlines against today's clock, so this check is skipped."
+        : null,
+    );
     setRunning(true);
     setTab("routes");
     t0.current = Date.now();
     try {
-      const r = await fetch(`${API}/run`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ prompt }) });
+      const r = await fetch(`${API}/run`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ prompt: text }) });
       if (!r.ok) throw new Error(`Backend refused the run (${r.status})`);
       const { id } = await r.json();
       const ws = new WebSocket(`${API.replace(/^http/, "ws")}/ws/run/${id}`);
@@ -345,7 +381,10 @@ export default function Home() {
             className="flex min-h-0 flex-1 flex-col"
             onSubmit={(e) => {
               e.preventDefault();
-              if (!running && prompt.trim()) start();
+              if (running || !prompt.trim() || badTime) return;
+              const t = finalPrompt();
+              if (t !== prompt) setPrompt(t);
+              start(t);
             }}
           >
             <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 pb-3 md:px-5">
@@ -370,6 +409,8 @@ export default function Home() {
                 current={prompt}
                 onPick={(x) => {
                   setPrompt(x);
+                  setDeadlineText("");
+                  setLeaveText("");
                   setError("");
                   promptRef.current?.focus();
                 }}
@@ -396,7 +437,13 @@ export default function Home() {
                   );
                 })}
               </div>
-              <TripOptions prompt={prompt} setPrompt={setPrompt} focusPrompt={() => promptRef.current?.focus()} priority={priority} setPriority={setPriority} />
+              <TripOptions prompt={prompt} setPrompt={setPrompt} focusPrompt={() => promptRef.current?.focus()} priority={priority}
+                setPriority={setPriority}
+                deadlineText={deadlineText}
+                setDeadlineText={(t) => typeTime("deadline", t)}
+                leaveText={leaveText}
+                setLeaveText={(t) => typeTime("leave", t)}
+              />
               {error && (
                 <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-800">
                   {error}
@@ -407,14 +454,20 @@ export default function Home() {
               <button
                 type="submit"
                 data-testid="plan-trip"
-                disabled={running || !prompt.trim()}
+                disabled={running || !prompt.trim() || !!badTime}
                 aria-describedby="plan-hint"
                 className="w-full rounded-full bg-zinc-900 px-6 py-3 text-sm font-semibold text-white transition-colors duration-150 hover:bg-zinc-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-900 disabled:opacity-50"
               >
                 {running ? `Bots working… ${elapsed}s` : "Plan my trip"}
               </button>
               <p id="plan-hint" data-testid="plan-hint" className="mt-1.5 text-center text-xs text-zinc-500" aria-live="polite">
-                {running ? "The bots are working on your last trip." : !prompt.trim() ? "Type a trip above or pick an example to plan." : "Edit the text as much as you like before planning."}
+                {running
+                  ? "The bots are working on your last trip."
+                  : !prompt.trim()
+                    ? "Type a trip above or pick an example to plan."
+                    : badTime
+                      ? "Fix the time under Deadline and leave time first (try 5pm or 17:30)."
+                      : "Edit the text as much as you like before planning."}
               </p>
             </div>
           </form>
@@ -493,6 +546,7 @@ export default function Home() {
                 state={bots[b.key]}
                 running={running}
                 budget={budget}
+                deadlineNote={deadlineNote}
                 focused={focus === b.key}
                 chosen={chosen === b.key}
                 onFocus={() => setFocus((f) => (f === b.key ? null : b.key))}
