@@ -11,7 +11,7 @@ from . import bikeshare, fares, osm, transit
 from .config import SPEEDS_KMH, traffic_multiplier
 from .geo import haversine_km
 
-ALL_MODES = ["walk", "bike", "ebike", "bikeshare", "drive", "transit", "park_ride"]
+ALL_MODES = ["walk", "bike", "ebike", "bikeshare", "drive", "rideshare", "transit", "park_ride"]
 NEEDS = {"bike": "has_bike", "ebike": "has_ebike", "drive": "has_car", "park_ride": "has_car"}
 
 PARK_RIDE_LOTS = [
@@ -65,7 +65,7 @@ def _finish(cand_id: str, title: str, legs: list[dict], c: Constraints, depart: 
     if c.bags:
         bag -= min(0.6, walk_m / 2500) + 0.12 * transfers
         if biking_m:
-            bag -= 0.5
+            bag -= 0.75
         if any(l["mode"] == "subway" for l in legs) and c.avoid_stairs:
             bag -= 0.1
     bag = round(max(0.0, min(1.0, bag)), 2)
@@ -160,6 +160,14 @@ async def plan(origin: tuple[float, float], dest: tuple[float, float], c: Constr
                                [f"Parking ${park:.2f} (estimated rate), {int(prob*100)}% chance of finding a spot quickly (estimate)",
                                 f"Traffic factor x{tm} for {hour:02d}:00 (typical-day estimate, not live)"],
                                extra={"parking_find_probability": prob}))
+
+        elif m == "rideshare":
+            g = await osm.leg("drive", origin, dest)
+            dur = g["duration_s"] * tm + 4 * 60  # + pickup wait
+            fare = fares.rideshare_cost(g["distance_km"], dur / 60)
+            lg = _leg("car", "Rideshare / taxi (fare estimated)", origin, dest, g, fare, fares.emissions_kg("car", g["distance_km"]), dur)
+            out.append(_finish("rideshare", "Rideshare", [lg], c, depart, hour, 0,
+                               [f"Fare ${fare:.2f} is an ESTIMATE (no surge pricing modeled)", "Door to door, easy with bags"]))
 
         elif m == "transit":
             for opt in (await transit.rail_option(origin, dest, hour), await transit.bus_option(origin, dest, hour)):

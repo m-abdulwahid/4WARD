@@ -57,3 +57,8 @@ def bikeshare_cost(minutes: float, ebike: bool = False) -> float:
 
 def emissions_kg(mode: str, distance_km: float) -> float:
     return round(EMISSIONS_G_PER_KM.get(mode, 0) * distance_km / 1000.0, 3)
+
+
+def rideshare_cost(distance_km: float, minutes: float) -> float:
+    return round(A["rideshare_base"]["value"] + A["rideshare_per_km"]["value"] * distance_km
+                 + A["rideshare_per_min"]["value"] * minutes, 2)

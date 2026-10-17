@@ -19,6 +19,9 @@ ASSUMPTIONS = {
     "bikeshare_unlock": {"value": 1.00, "unit": "CAD", "note": "Bike Share Toronto single-trip unlock (verify)"},
     "bikeshare_per_min": {"value": 0.20, "unit": "CAD/min", "note": "Casual per-minute rate (verify)"},
     "bikeshare_ebike_per_min": {"value": 0.20, "unit": "CAD/min", "note": "E-bike surcharge per minute (verify)"},
+    "rideshare_base": {"value": 3.50, "unit": "CAD", "note": "Rideshare base + booking fee (ESTIMATE, no surge modeled)"},
+    "rideshare_per_km": {"value": 1.45, "unit": "CAD/km", "note": "Rideshare distance rate (estimated)"},
+    "rideshare_per_min": {"value": 0.40, "unit": "CAD/min", "note": "Rideshare time rate (estimated)"},
     "ttc_lot_parking_day": {"value": 6.00, "unit": "CAD", "note": "TTC commuter lot daily parking (estimated, verify)"},
     "own_ebike_cost_per_km": {"value": 0.02, "unit": "CAD/km", "note": "Electricity + battery wear (estimated)"},
 }

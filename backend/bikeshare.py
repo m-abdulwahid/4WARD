@@ -28,8 +28,7 @@ async def stations(max_age_s: int = 30) -> dict:
                 st = by.get(s["station_id"])
                 if not st or not st.get("is_renting", 1):
                     continue
-                types = st.get("vehicle_types_available") or []
-                ebikes = sum(t.get("count", 0) for t in types if str(t.get("vehicle_type_id")) in ("2", "EFIT", "ebike"))
+                ebikes = (st.get("num_bikes_available_types") or {}).get("ebike", 0)
                 out.append({"id": s["station_id"], "name": s["name"], "lat": s["lat"], "lon": s["lon"],
                             "bikes": st.get("num_bikes_available", 0), "ebikes": ebikes,
                             "docks": st.get("num_docks_available", 0)})

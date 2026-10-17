@@ -57,7 +57,7 @@ export type Constraints = {
   stay_hours?: number | null;
 };
 
-export const ALL_MODES = ["walk", "bike", "ebike", "bikeshare", "drive", "transit", "park_ride"] as const;
+export const ALL_MODES = ["walk", "bike", "ebike", "bikeshare", "drive", "rideshare", "transit", "park_ride"] as const;
 
 export async function computeRoute(origin: string, destination: string, constraints: Constraints): Promise<RouteResult> {
   const r = await fetch(`${API}/route`, {

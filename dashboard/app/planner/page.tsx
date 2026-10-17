@@ -11,6 +11,7 @@ const MODE_LABEL: Record<string, string> = {
   ebike: "My e-bike",
   bikeshare: "Bike Share",
   drive: "Drive",
+  rideshare: "Rideshare",
   transit: "TTC transit",
   park_ride: "Park & ride",
 };
@@ -20,6 +21,7 @@ const COLORS: Record<string, string> = {
   ebike: "#0d9488",
   bikeshare: "#65a30d",
   drive: "#dc2626",
+  rideshare: "#db2777",
   transit_rail: "#2563eb",
   transit_bus: "#7c3aed",
   park_ride: "#ea580c",
