@@ -1,8 +1,9 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
-import { API, Candidate } from "@/lib/api";
+import { API, Candidate, apiHeaders, runWebSocketUrl } from "@/lib/api";
 import InsightsPanel from "@/components/InsightsPanel";
+import LivePanel from "@/components/LivePanel";
 
 const RouteMap = dynamic(() => import("@/components/RouteMap"), { ssr: false });
 
@@ -89,10 +90,14 @@ export default function Home() {
     setRunning(true);
     t0.current = Date.now();
     try {
-      const r = await fetch(`${API}/run`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ prompt }) });
+      const r = await fetch(`${API}/run`, {
+        method: "POST",
+        headers: apiHeaders({ "content-type": "application/json" }),
+        body: JSON.stringify({ prompt }),
+      });
       if (!r.ok) throw new Error(`Backend refused the run (${r.status})`);
       const { id } = await r.json();
-      const ws = new WebSocket(`${API.replace(/^http/, "ws")}/ws/run/${id}`);
+      const ws = new WebSocket(runWebSocketUrl(id));
       wsRef.current = ws;
       ws.onmessage = (m) => {
         const ev = JSON.parse(m.data);
@@ -303,6 +308,7 @@ export default function Home() {
           </section>
         )}
 
+        <LivePanel />
         <InsightsPanel />
       </div>
     </div>

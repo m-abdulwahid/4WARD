@@ -159,6 +159,141 @@ class Store:
             for v in ("ttc_route_hourly", "bike_system_hourly"):
                 c.execute(f"CALL refresh_continuous_aggregate('{v}', NULL, NULL)")
 
+    def live(self, route_id: str | None = None, history_hours: int = 24) -> dict:
+        """Latest raw poll + 3h sparkline + hourly CAGG history for the Live data panel."""
+        t0 = time.perf_counter()
+        routes_available = self._live_route_ids()
+        chosen = route_id if route_id in routes_available else (routes_available[0] if routes_available else None)
+        latest_routes, latest_ts, latest_source = self._live_latest_routes()
+        bikes = self._live_latest_bikes()
+        sparkline = self._live_sparkline(chosen, hours=3) if chosen else []
+        history = self._live_history(chosen, hours=history_hours) if chosen else []
+        first_ts, poll_count = self._live_footer_stats()
+        query_ms = round((time.perf_counter() - t0) * 1000, 1)
+        return {
+            "backend": self.backend,
+            "query_ms": query_ms,
+            "route_id": chosen,
+            "routes_available": routes_available,
+            "latest": {
+                "ts": latest_ts,
+                "source": latest_source,
+                "routes": latest_routes,
+                "bikes": bikes,
+            },
+            "sparkline": sparkline,
+            "history": history,
+            "footer": {
+                "collected_since": first_ts,
+                "poll_count": poll_count,
+                "last_update_ts": latest_ts,
+                "query_ms": query_ms,
+            },
+        }
+
+    def _ts_epoch(self, col: str = "ts") -> str:
+        return f"extract(epoch from {col})::bigint" if self.pg else col
+
+    def _live_route_ids(self) -> list[str]:
+        since = int(time.time()) - 3 * 3600
+        ph = "to_timestamp(%s)" if self.pg else "%s"
+        rows = self._exec(
+            f"SELECT route_id FROM ttc_route_snapshot WHERE ts >= {ph} "
+            f"GROUP BY route_id ORDER BY count(*) DESC, route_id LIMIT 40",
+            (since,),
+            fetch=True,
+        )
+        return [r[0] for r in (rows or [])]
+
+    def _live_latest_routes(self) -> tuple[list[dict], int | None, str | None]:
+        te = self._ts_epoch()
+        if self.pg:
+            rows = self._exec(
+                f"SELECT {te}, route_id, active_trips, cancelled_trips, avg_delay_s, alerts, source "
+                "FROM ttc_route_snapshot WHERE ts = (SELECT max(ts) FROM ttc_route_snapshot) "
+                "ORDER BY route_id",
+                fetch=True,
+            )
+        else:
+            rows = self._exec(
+                f"SELECT {te}, route_id, active_trips, cancelled_trips, avg_delay_s, alerts, source "
+                "FROM ttc_route_snapshot WHERE ts = (SELECT max(ts) FROM ttc_route_snapshot) "
+                "ORDER BY route_id",
+                fetch=True,
+            )
+        if not rows:
+            return [], None, None
+        out = [
+            {
+                "route_id": r[1],
+                "active_trips": r[2],
+                "cancelled_trips": r[3],
+                "avg_delay_s": r[4],
+                "alerts": r[5],
+                "ts": int(r[0]),
+                "source": r[6],
+            }
+            for r in rows
+        ]
+        return out, int(rows[0][0]), rows[0][6]
+
+    def _live_latest_bikes(self) -> dict | None:
+        te = self._ts_epoch()
+        rows = self._exec(
+            f"SELECT {te}, stations, bikes, ebikes, docks, source FROM bike_system_snapshot "
+            "ORDER BY ts DESC LIMIT 1",
+            fetch=True,
+        )
+        if not rows:
+            return None
+        r = rows[0]
+        return {
+            "ts": int(r[0]),
+            "stations": r[1],
+            "bikes": r[2],
+            "ebikes": r[3],
+            "docks": r[4],
+            "source": r[5],
+        }
+
+    def _live_sparkline(self, route_id: str, hours: int = 3) -> list[dict]:
+        since = int(time.time()) - hours * 3600
+        ph = "to_timestamp(%s)" if self.pg else "%s"
+        te = self._ts_epoch()
+        rows = self._exec(
+            f"SELECT {te}, avg_delay_s, source FROM ttc_route_snapshot "
+            f"WHERE route_id = %s AND ts >= {ph} ORDER BY ts",
+            (route_id, since),
+            fetch=True,
+        )
+        return [{"ts": int(r[0]), "avg_delay_s": r[1], "source": r[2]} for r in (rows or [])]
+
+    def _live_history(self, route_id: str, hours: int = 24) -> list[dict]:
+        since = int(time.time()) - hours * 3600
+        if self.pg:
+            rows = self._exec(
+                "SELECT extract(epoch from bucket)::bigint, avg_delay_s, samples "
+                "FROM ttc_route_hourly WHERE route_id = %s AND bucket >= to_timestamp(%s) ORDER BY bucket",
+                (route_id, since),
+                fetch=True,
+            )
+        else:
+            rows = self._exec(
+                "SELECT (ts/3600)*3600 AS b, AVG(avg_delay_s), COUNT(*) "
+                "FROM ttc_route_snapshot WHERE route_id = %s AND ts >= %s GROUP BY b ORDER BY b",
+                (route_id, since),
+                fetch=True,
+            )
+        return [{"bucket": int(r[0]), "avg_delay_s": r[1], "samples": int(r[2] or 0)} for r in (rows or [])]
+
+    def _live_footer_stats(self) -> tuple[int | None, int]:
+        te = self._ts_epoch()
+        # Distinct poll timestamps on the bike table ≈ number of collector cycles (one row per poll).
+        rows = self._exec(f"SELECT min({te}), count(*) FROM bike_system_snapshot", fetch=True)
+        if not rows or rows[0][0] is None:
+            return None, 0
+        return int(rows[0][0]), int(rows[0][1])
+
 
 store = Store()
 

@@ -1,0 +1,11 @@
+.venv
+.git
+dashboard/node_modules
+dashboard/.next
+data
+.pytest_cache
+__pycache__
+*.pyc
+.env
+data/*.log
+data/*.err.log

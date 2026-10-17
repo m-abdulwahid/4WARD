@@ -1,5 +1,19 @@
 export const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
+/** Shared bot token for /run and WebSocket. Empty in local when BOT_TOKEN is unset. */
+export const BOT_TOKEN = process.env.NEXT_PUBLIC_BOT_TOKEN ?? "";
+
+export function apiHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  const h: Record<string, string> = { ...extra };
+  if (BOT_TOKEN) h["X-Bot-Token"] = BOT_TOKEN;
+  return h;
+}
+
+export function runWebSocketUrl(runId: string): string {
+  const base = `${API.replace(/^http/, "ws")}/ws/run/${runId}`;
+  return BOT_TOKEN ? `${base}?bot_token=${encodeURIComponent(BOT_TOKEN)}` : base;
+}
+
 export type Leg = {
   mode: string;
   label: string;

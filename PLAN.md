@@ -44,6 +44,17 @@ Each phase ends with something you can run. Do not start the next one until the 
 ### Phase 6: four bots, coordination, live view
 > Add the Fastest, Greenest, and Most reliable profiles. Run all four with asyncio.gather, each in its own Steel session. Write results to bot_runs. Add the diversity rule (rerun the lower priority bot with "must differ from route X in at least one leg" if two routes match) and a critic pass that checks each route against the constraints using engine output only. Add a Gemini step that parses the user's plain language prompt into constraints JSON. Embed each bot's Steel live view in a 2x2 grid and link each trace when the bot finishes.
 
+### Phase 6b: ride-hail leg and fare scouts (this is where the "Uber part" goes)
+Before this phase, do one manual check yourself: in a logged-out browser, see whether a public ride price estimator page works without logging in, and read the site's terms about automated access. If it needs a login or forbids automation, use `sim` only.
+
+> Add a ride-hail provider layer in backend/ridehail/ with three backends: sim, steel_live, cache, chosen by RIDEHAIL_PROVIDER. Build the sim as a page at /ridesim in the dashboard called RideSim: pickup and drop-off search, a Get price button, a 60 second quote countdown, a surge multiplier by pickup zone and time, and a Trigger storm button. Show a SIMULATED banner on every page and do not use any real company's name, logo, or styling. Fare = base + per km + per minute times surge. Store every quote in a fare_quotes hypertable in Tiger Data.
+
+> Add fare scouts: for a trip, pick up to 4 candidate transit hubs near the origin, then open one Steel session per hub in parallel (asyncio.gather) and have each scout use Gemini function calling to type the pickup and drop-off into RideSim and read the quote. Always release sessions in finally. Write results to fare_quotes with provider and simulated flag. Respect the 60 second expiry and cache by (pickup, dropoff, 2 minute window).
+
+> Wire the provider layer into /route: allow itineraries with a ride-hail first or last leg, price that leg from fare_quotes, add its emissions, and show a SIMULATED or LIVE label on its cost in the results panel. Add a test that a short ride plus train beats a direct ride on cost when the sim surge is high.
+
+> Optional, only if the manual check passed: implement steel_live as a read only scout of a public price estimator page. No login, no booking, at most one request per pair per minute, cache results, and stop on any block or captcha instead of trying to get around it.
+
 ### Phase 7: reliability engine
 > In Tiger Data, use the continuous aggregate to score each route's reliability: estimate the chance of making each transfer from the delay distribution, then replay historical days to get "made the deadline on X% of past weekdays." Expose it in /route. Add one dashboard chart (delay by route and hour) powered by the continuous aggregate. Backfill from historical TTC delay data if it is available.
 
