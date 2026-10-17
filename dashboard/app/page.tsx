@@ -9,17 +9,25 @@ import BotDrawer from "@/components/BotDrawer";
 import LayerToggles from "@/components/LayerToggles";
 import MapLegend from "@/components/MapLegend";
 import TripOptions, { Priority } from "@/components/TripOptions";
+import ExampleTrips from "@/components/ExampleTrips";
 import { ModeKey, legColor, legMode } from "@/lib/modes";
 import { DbStatus, TONE, dbLabel } from "@/lib/dataSource";
 import type { BikeStation, MapPadding } from "@/components/RouteMap";
 
 const RouteMap = dynamic(() => import("@/components/RouteMap"), { ssr: false });
 
-const EXAMPLES = [
-  "Get me from York University to Union Station by 5pm. I have 2 big bags, no Presto card, but I have my car.",
-  "I'm at Kipling Station and need to reach the CN Tower by 6pm with a suitcase. No Presto.",
-  "From the Beaches to Pearson Airport, leaving at 7am, I have 2 suitcases and an e-bike.",
-];
+// Turn backend/network messages into what the user should do next.
+function friendlyError(msg: string): string {
+  if (/origin and destination/i.test(msg))
+    return "We couldn't tell where you're starting and where you're going. Write it as \u201cA to B\u201d, for example \u201cYork U to CN Tower\u201d, then press Plan my trip again.";
+  if (/failed to fetch|networkerror|load failed|refused the run/i.test(msg))
+    return "We can't reach the 4WARD backend right now. Check that it is running (start.ps1), then press Plan my trip again.";
+  if (/lost connection/i.test(msg)) return "The connection to the 4WARD backend dropped while the bots were working. Check that it is running, then press Plan my trip again.";
+  if (/prompt is empty/i.test(msg)) return "Type a trip first, or pick an example.";
+  return `Something went wrong (${msg}). Try rewording your trip, or start from an example.`;
+}
+
+type Place = { typed: string; found: { name: string; source: string } | null };
 
 // Quick-add chips append a phrase the prompt parser already understands (bots/nlp.py).
 // "test" decides whether the prompt already mentions it, so the chip shows as on.
@@ -71,7 +79,9 @@ export default function Home() {
   const [tab, setTab] = useState<Tab>("map");
   const [sheetFull, setSheetFull] = useState(false);
   const [drawer, setDrawer] = useState(false);
-  const [prompt, setPrompt] = useState(EXAMPLES[0]);
+  const [prompt, setPrompt] = useState("");
+  // what each typed place was matched to (the geocoder only searches inside Toronto)
+  const [places, setPlaces] = useState<{ origin: Place; destination: Place } | null>(null);
   const [bots, setBots] = useState<Record<BotKey, BotState>>(blankBots);
   const [running, setRunning] = useState(false);
   const [parsed, setParsed] = useState<{ origin: string; destination: string; parser?: string; constraints?: Record<string, unknown> } | null>(null);
@@ -107,6 +117,21 @@ export default function Home() {
     return () => clearInterval(i);
   }, [running]);
 
+  const backToPrompt = () => {
+    setTab("map");
+    setTimeout(() => promptRef.current?.focus(), 50);
+  };
+
+  const checkPlaces = (origin: string, destination: string) => {
+    const look = (q: string): Promise<Place> =>
+      fetch(`${API}/geocode?q=${encodeURIComponent(q)}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((g) => ({ typed: q, found: g ? { name: g.name, source: g.source } : null }));
+    Promise.all([look(origin), look(destination)])
+      .then(([o, d]) => setPlaces({ origin: o, destination: d }))
+      .catch(() => {}); // backend errors surface through the run itself
+  };
+
   const patch = useCallback((k: BotKey, p: Partial<BotState>) => setBots((b) => ({ ...b, [k]: { ...b[k], ...p } })), []);
 
   const start = useCallback(async () => {
@@ -115,6 +140,7 @@ export default function Home() {
     setChosen(null);
     setFocus(null);
     setParsed(null);
+    setPlaces(null);
     setBots(blankBots());
     setBudget(readBudget(prompt));
     setRunning(true);
@@ -129,25 +155,33 @@ export default function Home() {
       ws.onmessage = (m) => {
         const ev = JSON.parse(m.data);
         const k = ev.bot as BotKey;
-        if (ev.type === "parsed") setParsed(ev);
+        if (ev.type === "parsed") {
+          setParsed(ev);
+          if (ev.origin && ev.destination) checkPlaces(ev.origin, ev.destination);
+        }
         else if (ev.type === "frame") patch(k, { frame: ev.data });
         else if (ev.type === "status") patch(k, { status: ev.status });
         else if (ev.type === "step") setBots((b) => ({ ...b, [k]: { ...b[k], steps: ev.n, lastReason: ev.reason ?? b[k].lastReason } }));
         else if (ev.type === "result") patch(k, { status: ev.status, route: ev.route, brain: ev.brain, elapsed: ev.elapsed_s, error: ev.error });
         else if (ev.type === "run_done") {
           setRunning(false);
-          if (ev.result?.error) setError(ev.result.error);
+          if (ev.result?.error) {
+            setError(friendlyError(ev.result.error));
+            if (/origin and destination/i.test(ev.result.error)) backToPrompt();
+          }
           ws.close();
         }
       };
       ws.onerror = () => {
-        setError("Lost connection to the backend.");
+        setError(friendlyError("Lost connection to the backend."));
         setRunning(false);
       };
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(friendlyError(e instanceof Error ? e.message : String(e)));
       setRunning(false);
+      backToPrompt();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prompt, patch]);
 
   const done = BOTS.filter((b) => bots[b.key].route);
@@ -324,8 +358,21 @@ export default function Home() {
                 data-testid="prompt-input"
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
+                placeholder="Where are you going? e.g. Union Station to Pearson by 6pm, 2 suitcases, no Presto card"
+                aria-describedby="prompt-hint"
                 rows={4}
                 className="w-full shrink-0 resize-none rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-sm leading-relaxed focus:border-zinc-400 focus:bg-white focus:outline-none"
+              />
+              <p id="prompt-hint" data-testid="prompt-hint" className="-mt-1 text-xs leading-relaxed text-zinc-600">
+                <span className="font-semibold text-zinc-800">Try your own.</span> Short is fine (&ldquo;York U to CN Tower&rdquo;). Places must be in Toronto. 4WARD understands a deadline (&ldquo;by 6pm&rdquo;), bags, a budget (&ldquo;budget $10&rdquo;), no Presto card, a car or electric car, your bike or e-bike, and stairs or a stroller (step-free access is not checked yet).
+              </p>
+              <ExampleTrips
+                current={prompt}
+                onPick={(x) => {
+                  setPrompt(x);
+                  setError("");
+                  promptRef.current?.focus();
+                }}
               />
               <div role="group" aria-label="Quick add" className="flex flex-wrap gap-2">
                 {QUICK.map((q) => {
@@ -349,20 +396,6 @@ export default function Home() {
                   );
                 })}
               </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-xs text-zinc-500">Try:</span>
-                {EXAMPLES.map((x, i) => (
-                  <button
-                    key={i}
-                    type="button"
-                    data-testid={`example-${i}`}
-                    onClick={() => setPrompt(x)}
-                    className="rounded-full bg-zinc-100 px-3 py-1 text-xs font-medium text-zinc-700 transition-colors duration-150 hover:bg-zinc-200 focus-visible:outline-2 focus-visible:outline-zinc-900"
-                  >
-                    Example {i + 1}
-                  </button>
-                ))}
-              </div>
               <TripOptions prompt={prompt} setPrompt={setPrompt} focusPrompt={() => promptRef.current?.focus()} priority={priority} setPriority={setPriority} />
               {error && (
                 <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-800">
@@ -375,10 +408,14 @@ export default function Home() {
                 type="submit"
                 data-testid="plan-trip"
                 disabled={running || !prompt.trim()}
+                aria-describedby="plan-hint"
                 className="w-full rounded-full bg-zinc-900 px-6 py-3 text-sm font-semibold text-white transition-colors duration-150 hover:bg-zinc-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-900 disabled:opacity-50"
               >
                 {running ? `Bots working… ${elapsed}s` : "Plan my trip"}
               </button>
+              <p id="plan-hint" data-testid="plan-hint" className="mt-1.5 text-center text-xs text-zinc-500" aria-live="polite">
+                {running ? "The bots are working on your last trip." : !prompt.trim() ? "Type a trip above or pick an example to plan." : "Edit the text as much as you like before planning."}
+              </p>
             </div>
           </form>
         </div>
@@ -386,7 +423,7 @@ export default function Home() {
         {/* ROUTES tab */}
         <div id="panel-routes" role="tabpanel" aria-labelledby="tab-routes" hidden={tab !== "routes"} className="flex min-h-0 flex-1 flex-col">
           <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 pb-3 md:px-5">
-            {parsed && (
+            {parsed?.origin && parsed.destination && (
               <p className="rounded-xl bg-zinc-50 p-3 text-xs text-zinc-600" data-testid="parsed-summary">
                 Understood ({parsed.parser}): <b className="text-zinc-900">{parsed.origin}</b> to <b className="text-zinc-900">{parsed.destination}</b>
                 {parsed.constraints &&
@@ -396,6 +433,50 @@ export default function Home() {
                     .join(", ")}`}
               </p>
             )}
+            {places && (
+              <div data-testid="places-check" className="rounded-xl bg-zinc-50 p-3 text-xs text-zinc-600">
+                <p className="font-semibold text-zinc-800">Where we looked (Toronto only)</p>
+                {(["origin", "destination"] as const).map((k) => {
+                  const pl = places[k];
+                  const fuzzy = !!pl.found && pl.found.source !== "gazetteer" && pl.found.name.toLowerCase() !== pl.typed.toLowerCase();
+                  return (
+                    <p key={k} className={!pl.found ? "text-red-800" : fuzzy ? "text-amber-900" : ""}>
+                      {k === "origin" ? "From" : "To"} &ldquo;{pl.typed}&rdquo;: {!pl.found ? "not found in Toronto" : <b className="font-semibold">{pl.found.name}</b>}
+                      {fuzzy && " (closest match from an OpenStreetMap search, check this is the place you meant)"}
+                    </p>
+                  );
+                })}
+              </div>
+            )}
+            {(() => {
+              // Friendly summary when the trip cannot be planned as typed.
+              const missing =
+                (places && (["origin", "destination"] as const).map((k) => places[k]).find((pl) => !pl.found)?.typed) ??
+                BOTS.map((b) => bots[b.key].error?.match(/Could not locate place: '([^']+)'/)?.[1]).find(Boolean);
+              const allFailed = !running && !!parsed?.origin && BOTS.every((b) => bots[b.key].status === "FAILED");
+              if (!missing && !allFailed) return null;
+              return (
+                <div role="alert" data-testid="trip-problem" className="rounded-xl bg-red-50 p-3 text-sm text-red-900">
+                  <p>
+                    {missing ? (
+                      <>
+                        We couldn&rsquo;t find &ldquo;{missing}&rdquo; in Toronto. Try a street address, an intersection like &ldquo;King and Spadina&rdquo;, or a landmark like &ldquo;CN Tower&rdquo;.
+                      </>
+                    ) : (
+                      <>None of the four bots could finish a route for this trip. Try rewording it, or start from an example.</>
+                    )}
+                  </p>
+                  <button
+                    type="button"
+                    data-testid="edit-trip"
+                    onClick={backToPrompt}
+                    className="mt-2 rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-red-900 ring-1 ring-red-200 hover:bg-red-100 focus-visible:outline-2 focus-visible:outline-red-900"
+                  >
+                    Edit my trip
+                  </button>
+                </div>
+              );
+            })()}
             {running && <p className="text-xs text-zinc-500" role="status">Bots working… {elapsed}s</p>}
             {error && (
               <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-800">
