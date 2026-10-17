@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { Candidate } from "@/lib/api";
@@ -29,6 +29,38 @@ function along(coords: [number, number][], f: number): [number, number] {
 maplibregl.setWorkerUrl("/maplibre-gl-worker.mjs");
 
 const TORONTO: [number, number] = [-79.3832, 43.6532];
+
+// Basemap: OpenFreeMap "Liberty" (OpenMapTiles schema). Free, no API key, no usage limits, commercial use allowed;
+// attribution "OpenFreeMap © OpenMapTiles Data from OpenStreetMap" comes from the style and is shown by MapLibre.
+const BASEMAP = "https://tiles.openfreemap.org/styles/liberty";
+
+// Liberty's parks and water are pastel; these stronger fills make them read at a glance without fighting the routes.
+const BOOST: [string, "fill-color" | "line-color", string][] = [
+  ["park", "fill-color", "#b9dfa0"],
+  ["landcover_grass", "fill-color", "#b3d996"],
+  ["landcover_wood", "fill-color", "#9fd085"],
+  ["water", "fill-color", "#86b6f2"],
+  ["waterway_river", "line-color", "#86b6f2"],
+  ["waterway_other", "line-color", "#86b6f2"],
+];
+
+// Used only if the vector basemap cannot load: the plain OpenStreetMap raster tiles the map used before.
+const OSM_FALLBACK: maplibregl.StyleSpecification = {
+  version: 8,
+  sources: {
+    osm: {
+      type: "raster",
+      tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
+      tileSize: 256,
+      maxzoom: 19,
+      attribution: "© OpenStreetMap contributors",
+    },
+  },
+  layers: [
+    { id: "bg", type: "background", paint: { "background-color": "#eef0ea" } }, // something to draw on if even these fail
+    { id: "osm", type: "raster", source: "osm" },
+  ],
+};
 const NO_PAD: MapPadding = { top: 60, right: 60, bottom: 60, left: 60 };
 
 export default function RouteMap({
@@ -53,6 +85,7 @@ export default function RouteMap({
   const markers = useRef<maplibregl.Marker[]>([]);
   const ready = useRef(false);
   const fitted = useRef("");
+  const [styleGen, setStyleGen] = useState(0); // bumped on every style load, so overlays and routes are redrawn
   const pad = useRef(padding);
   pad.current = padding;
 
@@ -63,11 +96,36 @@ export default function RouteMap({
       center: TORONTO,
       zoom: 11,
       attributionControl: { compact: true },
-      // Positron style from OpenFreeMap: free, no API key (CARTO's own Positron tiles now need a key)
-      style: "https://tiles.openfreemap.org/styles/positron",
+      style: BASEMAP,
     });
     m.addControl(new maplibregl.NavigationControl({ showCompass: false }), "bottom-right");
-    m.on("load", () => {
+
+    // Fall back to plain OSM raster tiles if the vector basemap cannot load (offline, provider down).
+    let fellBack = false;
+    let loadedOnce = false;
+    let tileErrors = 0;
+    const fallBack = () => {
+      if (fellBack) return;
+      fellBack = true;
+      ready.current = false;
+      m.setStyle(OSM_FALLBACK, { diff: false });
+    };
+    const timer = setTimeout(() => !loadedOnce && fallBack(), 8000);
+    m.on("error", (e: maplibregl.ErrorEvent & { sourceId?: string }) => {
+      if (fellBack) return;
+      if (!loadedOnce) return fallBack(); // the style itself failed
+      if (e.sourceId === "openmaptiles" && ++tileErrors >= 4) fallBack(); // its tiles keep failing
+    });
+
+    // Fires for the first style and again after a fallback: (re)add overlays, then let the effects redraw.
+    m.on("style.load", () => {
+      loadedOnce = true;
+      clearTimeout(timer);
+      if (!fellBack) {
+        for (const [layer, prop, color] of BOOST) {
+          if (m.getLayer(layer)) m.setPaintProperty(layer, prop, color);
+        }
+      }
       // Overlays are added before any route, so routes always draw on top of them.
       m.addSource("ttc", { type: "geojson", data: "/ttc-lines.geojson" });
       m.addLayer({
@@ -96,9 +154,11 @@ export default function RouteMap({
         },
       });
       ready.current = true;
+      setStyleGen((g) => g + 1);
     });
     map.current = m;
     return () => {
+      clearTimeout(timer);
       m.remove();
       map.current = null;
       ready.current = false;
@@ -120,9 +180,8 @@ export default function RouteMap({
         })),
       });
     };
-    if (ready.current) apply();
-    else m.once("load", apply);
-  }, [showTtc, bikeStations]);
+    if (ready.current) apply(); // otherwise style.load bumps styleGen and this runs again
+  }, [showTtc, bikeStations, styleGen]);
 
   useEffect(() => {
     const m = map.current;
@@ -163,7 +222,7 @@ export default function RouteMap({
                 type: "line",
                 source: id,
                 layout: { "line-cap": "round", "line-join": "round" },
-                paint: { "line-color": st.casing, "line-width": w + (dim ? 2 : 3.5), "line-opacity": dim ? 0.5 : 0.95 },
+                paint: { "line-color": dim ? "#ffffff" : st.casing, "line-width": w + (dim ? 2.5 : 3.5), "line-opacity": dim ? 0.8 : 0.95 },
               });
             }
             m.addLayer({
@@ -174,7 +233,8 @@ export default function RouteMap({
               paint: {
                 "line-color": legColor(leg, mode),
                 "line-width": w,
-                "line-opacity": dim ? 0.5 : 1,
+                // dimmed legs stay clearly visible on the colourful basemap: thinner, not washed out
+                "line-opacity": dim ? 0.75 : 1,
                 ...(st.dash ? { "line-dasharray": st.dash } : {}),
               },
             });
@@ -260,8 +320,7 @@ export default function RouteMap({
       }
     };
     if (ready.current) draw();
-    else m.once("load", draw);
-  }, [routes, origin, destination, colorBy]);
+  }, [routes, origin, destination, colorBy, styleGen]);
 
   return <div ref={el} className="h-full w-full" data-testid="map" role="application" aria-label="Route map of Toronto" />;
 }
