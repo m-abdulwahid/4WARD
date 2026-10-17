@@ -1,0 +1,10 @@
+.env
+.venv/
+__pycache__/
+node_modules/
+.next/
+data/gtfs/
+data/completegtfs.zip
+data/screenshots/
+data/*.log
+data/geocode_cache.json
