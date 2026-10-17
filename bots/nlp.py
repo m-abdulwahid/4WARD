@@ -8,8 +8,10 @@ import json
 import os
 import re
 
+from backend.geo import GAZETTEER
+
 NUM_WORDS = {"a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4}
-STOP = r"(?:\s+(?:by|before|at|with|arriving|around|and i|and we|using|but|in time|because|while)\b|[,.;]|$)"
+STOP = r"(?:\s+(?:by|before|at|with|arriving|around|and i|and we|using|but|in time|because|while|please|thanks)\b|[,.;]|$)"
 
 
 def _clock(h: str, m: str | None, ap: str | None) -> str:
@@ -31,9 +33,28 @@ def parse_rules(text: str) -> dict:
     if m:
         origin, destination = m.group(1).strip(), m.group(2).strip()
     else:
-        m = re.search(r"\bto\s+(.+?)\s+from\s+(.+?)" + STOP, t, re.I)
+        m = re.search(r"\bto\s+((?:(?!\bto\b).)+?)\s+from\s+(.+?)" + STOP, t, re.I)
         if m:
             destination, origin = m.group(1).strip(), m.group(2).strip()
+    if not (origin and destination):
+        m = re.search(r"(?:i'?m at|i am at|currently at|starting at|start at|at)\s+(.+?)\s+(?:and\s+)?(?:i\s+)?(?:need|want|have|must|would like)\s+to\s+(?:get to|reach|go to|travel to|be at|get)\s+(.+?)" + STOP, t, re.I)
+        if m:
+            origin, destination = m.group(1).strip(), m.group(2).strip()
+    if not (origin and destination):
+        m = re.match(r"\s*(?:please\s+)?(?:route\s+|take me\s+)?(.+?)\s+to\s+(.+?)" + STOP, t, re.I)
+        if m and len(m.group(1).split()) <= 5:
+            origin, destination = m.group(1).strip(), m.group(2).strip()
+    if not (origin and destination):  # last resort: two known landmarks, role decided by the word before each
+        hits = sorted((low.find(k), k) for k in GAZETTEER if k in low)
+        if len(hits) >= 2:
+            def role(pos: int) -> str:
+                before = low[max(0, pos - 14):pos]
+                return "dest" if re.search(r"(to|reach)\s+(the\s+)?$", before) else "orig" if re.search(r"(from|at)\s+(the\s+)?$", before) else ""
+            (p1, a), (p2, b) = hits[0], hits[1]
+            if role(p1) == "dest" or role(p2) == "orig":
+                a, b = b, a
+            origin, destination = a.title(), b.title()
+    origin, destination = (re.sub(r"^(?:the|my)\s+", "", x, flags=re.I) for x in (origin, destination))
     c: dict = {"bags": 0, "no_presto": False, "has_car": False, "ev": False, "has_bike": False,
                "has_ebike": False, "avoid_stairs": False}
     m = re.search(r"\b(\d+|an?|one|two|three|four)\s+(?:big |large |heavy |carry-on )?(?:bags?|suitcases?|luggage)\b", low)

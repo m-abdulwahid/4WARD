@@ -57,9 +57,9 @@ async def run_bot(browser: Browser, key: str, user: dict, base_url: str, emit: E
     result = {"bot": key, "name": prof.name, "status": "FAILED", "route": None, "steps": steps, "brain": "rule", "error": None}
     try:
         await _emit(emit, {"type": "status", "bot": key, "status": "SCANNING"})
-        await page.goto(f"{base_url}/planner?bot={key}", wait_until="domcontentloaded")
-        await page.get_by_test_id("compute-route").wait_for(timeout=20000)
-        await page.wait_for_function("window.__4ward !== undefined", timeout=20000)  # React hydrated
+        await page.goto(f"{base_url}/planner?bot={key}", wait_until="domcontentloaded", timeout=60000)
+        await page.get_by_test_id("compute-route").wait_for(timeout=60000)
+        await page.wait_for_function("window.__4ward !== undefined", timeout=60000)  # React hydrated
         if stream_frames:
             frame_task = asyncio.create_task(_frames(page, key, emit, stop, 2.5))
         brain = FallbackBrain(key, user)

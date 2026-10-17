@@ -4,6 +4,7 @@ import os
 import time
 from typing import Awaitable, Callable
 
+import httpx
 from playwright.async_api import async_playwright
 
 from .nlp import parse_prompt
@@ -11,6 +12,15 @@ from .profiles import PROFILES
 from .runner import run_bot
 
 Emit = Callable[[dict], Awaitable[None] | None]
+
+
+async def _warm_up(base_url: str) -> None:
+    """Hit /planner once so a cold Next dev server compiles it before four browsers pile on."""
+    try:
+        async with httpx.AsyncClient(timeout=60) as cl:
+            await cl.get(f"{base_url}/planner")
+    except Exception:
+        pass  # the bots will report a clear error if the dashboard is really down
 
 
 async def run_all(prompt: str, emit: Emit | None = None, base_url: str | None = None, keys: list[str] | None = None,
@@ -25,6 +35,7 @@ async def run_all(prompt: str, emit: Emit | None = None, base_url: str | None = 
     if not user["origin"] or not user["destination"]:
         return {"error": "Could not find an origin and destination in the prompt.", "parsed": user, "results": []}
     keys = keys or list(PROFILES)
+    await _warm_up(base_url)
     async with async_playwright() as p:
         browser = await p.chromium.launch()
         try:
