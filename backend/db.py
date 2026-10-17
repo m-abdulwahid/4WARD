@@ -23,6 +23,8 @@ CREATE TABLE IF NOT EXISTS bike_system_snapshot (ts INTEGER NOT NULL, stations I
   ebikes INTEGER NOT NULL DEFAULT 0, docks INTEGER NOT NULL, source TEXT NOT NULL DEFAULT 'live');
 CREATE INDEX IF NOT EXISTS ix_bike ON bike_system_snapshot(ts);
 CREATE TABLE IF NOT EXISTS bot_runs (ts INTEGER NOT NULL, run_id TEXT NOT NULL, prompt TEXT NOT NULL, result TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS bot_steps (ts INTEGER NOT NULL, run_id TEXT NOT NULL, bot TEXT NOT NULL, step INTEGER NOT NULL,
+  brain TEXT, action TEXT NOT NULL, ok INTEGER NOT NULL DEFAULT 1, note TEXT);
 """
 
 
@@ -36,8 +38,9 @@ class _NoLock:
 
 class Store:
     def __init__(self) -> None:
+        # Tiger Data is the main database. SQLite is only the offline fallback: replay mode (REPLAY=1) or no DATABASE_URL.
         self.url = os.environ.get("DATABASE_URL", "").strip()
-        self.pg = bool(self.url)
+        self.pg = bool(self.url) and os.environ.get("REPLAY") != "1"
         self.backend = "tigerdata" if self.pg else "sqlite-local"
         self._lite: sqlite3.Connection | None = None
         self._lock = threading.Lock()  # sqlite connection is shared across worker threads
@@ -97,6 +100,15 @@ class Store:
         else:
             self._exec("INSERT INTO bot_runs (ts,run_id,prompt,result) VALUES (%s,%s,%s,%s)", (int(time.time()), run_id, prompt, payload))
 
+    def insert_step(self, run_id: str, bot: str, step: int, action: dict, brain: str | None = None, ok: bool = True, note: str | None = None) -> None:
+        payload = json.dumps(action, default=str)
+        if self.pg:
+            self._exec("INSERT INTO bot_steps (run_id,bot,step,brain,action,ok,note) VALUES (%s,%s,%s,%s,%s::jsonb,%s,%s)",
+                       (run_id, bot, step, brain, payload, ok, note))
+        else:
+            self._exec("INSERT INTO bot_steps (ts,run_id,bot,step,brain,action,ok,note) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+                       (int(time.time()), run_id, bot, step, brain, payload, int(ok), note))
+
     # -- reads (what the dashboard charts call) ------------------------------------------
     def ttc_hourly(self, hours: int = 24, top: int = 6) -> list[dict]:
         since = int(time.time()) - hours * 3600
@@ -154,11 +166,19 @@ store = Store()
 def init_postgres() -> None:
     import psycopg
 
-    sql = (ROOT / "db" / "schema.sql").read_text()
+    def statements(name: str) -> list[str]:
+        sql = (ROOT / "db" / name).read_text()
+        return [s.strip() for s in sql.split(";\n") if s.strip() and not all(l.strip().startswith("--") or not l.strip() for l in s.splitlines())]
+
     with psycopg.connect(store.url, autocommit=True) as c:
-        for stmt in [s.strip() for s in sql.split(";\n") if s.strip() and not all(l.strip().startswith("--") or not l.strip() for l in s.splitlines())]:
+        for stmt in statements("schema.sql"):
             c.execute(stmt)
-    print("schema applied to Tiger Data")
+        print("schema applied to Tiger Data")
+        for stmt in statements("policies.sql"):  # best effort: a policy syntax difference must not block the schema
+            try:
+                c.execute(stmt)
+            except Exception as e:
+                print("policy skipped:", stmt.splitlines()[-1][:70], "->", type(e).__name__)
 
 
 if __name__ == "__main__":

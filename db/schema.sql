@@ -36,6 +36,19 @@ CREATE TABLE IF NOT EXISTS bot_runs (
     result  jsonb       NOT NULL
 );
 
+-- One row per bot action (what Gemini or the rule brain chose, whether it ran). Phase 5 fills this in.
+CREATE TABLE IF NOT EXISTS bot_steps (
+    ts      timestamptz NOT NULL DEFAULT now(),
+    run_id  text        NOT NULL,
+    bot     text        NOT NULL,
+    step    integer     NOT NULL,
+    brain   text,                     -- gemini | rules
+    action  jsonb       NOT NULL,
+    ok      boolean     NOT NULL DEFAULT true,
+    note    text
+);
+CREATE INDEX IF NOT EXISTS bot_steps_run ON bot_steps (run_id, bot, step);
+
 -- Continuous aggregates: pre-computed hourly rollups the dashboard charts read instantly.
 CREATE MATERIALIZED VIEW IF NOT EXISTS ttc_route_hourly
 WITH (timescaledb.continuous) AS
@@ -61,6 +74,18 @@ SELECT time_bucket(INTERVAL '1 hour', ts) AS bucket,
 FROM bike_system_snapshot
 GROUP BY bucket
 WITH NO DATA;
+
+-- Delay by route, day of week and hour of day, read straight off the hourly aggregate (cheap: a few thousand rows).
+-- This is what the Phase 7 reliability score uses ("how late is route X on Tuesdays at 8am").
+CREATE OR REPLACE VIEW ttc_delay_by_route_dow_hour AS
+SELECT route_id,
+       extract(dow  FROM bucket AT TIME ZONE 'America/Toronto')::int AS dow,
+       extract(hour FROM bucket AT TIME ZONE 'America/Toronto')::int AS hour,
+       avg(avg_delay_s) AS avg_delay_s,
+       max(avg_delay_s) AS worst_hourly_avg_delay_s,
+       sum(samples)     AS samples
+FROM ttc_route_hourly
+GROUP BY 1, 2, 3;
 
 SELECT add_continuous_aggregate_policy('ttc_route_hourly',
     start_offset => INTERVAL '3 days', end_offset => INTERVAL '1 minute', schedule_interval => INTERVAL '5 minutes',

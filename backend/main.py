@@ -20,7 +20,7 @@ from .config import ASSUMPTIONS, EMISSIONS_G_PER_KM, SPEEDS_KMH  # noqa: E402
 async def lifespan(_: FastAPI):
     """Optionally poll the live feeds in the background so the Tiger Data charts accrue real history."""
     task = None
-    secs = int(os.environ.get("INGEST_EVERY_S", "60"))
+    secs = int(os.environ.get("INGEST_EVERY_S", "90"))
     if secs > 0 and os.environ.get("REPLAY") != "1":
         task = asyncio.create_task(_poll_feeds(secs))
     yield

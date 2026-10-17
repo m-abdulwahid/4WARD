@@ -36,6 +36,9 @@ async def run_all(prompt: str, emit: Emit | None = None, base_url: str | None = 
         return {"error": "Could not find an origin and destination in the prompt.", "parsed": user, "results": []}
     keys = keys or list(PROFILES)
     await _warm_up(base_url)
+    backend = os.environ.get("BROWSER_BACKEND", "local").lower()
+    if backend != "local":
+        raise NotImplementedError(f"BROWSER_BACKEND={backend!r} is not built yet (Phase 5); use BROWSER_BACKEND=local")
     async with async_playwright() as p:
         browser = await p.chromium.launch()
         try:
