@@ -89,7 +89,7 @@ function Place({ id, label, value, onChange }: { id: string; label: string; valu
 const BOT_BADGE: Record<string, { name: string; color: string }> = {
   cheap: { name: "Economic bot", color: "#b45309" },
   fastest: { name: "Efficient bot", color: "#dc2626" },
-  green: { name: "Environmentally friendly bot", color: "#047857" },
+  green: { name: "Environmental bot", color: "#047857" },
   best: { name: "Best overall bot", color: "#7c3aed" },
 };
 

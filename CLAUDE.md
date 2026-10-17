@@ -59,7 +59,7 @@ Display names (UI and docs) with the internal key in brackets. Keys are used by 
 
 1. Economic (`cheap`): lowest total cost (fares with Presto rules, parking, gas, bike fees).
 2. Efficient (`fastest`): shortest door to door time.
-3. Environmentally friendly (`green`, "Eco" where space is tight): lowest kg CO2e.
+3. Environmental (`green`): lowest kg CO2e.
 4. Best overall (`best`): balanced trade-offs between time, cost, emissions, transfers, walking, and bags.
 
 Idea for later: a "Most reliable" goal (highest chance of making the deadline, from Tiger Data delay history).

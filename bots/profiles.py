@@ -14,13 +14,13 @@ class Profile:
 
 
 PROFILES: dict[str, Profile] = {
-    "cheap": Profile("cheap", "Cheapest", "#16a34a",
+    "cheap": Profile("cheap", "Economic", "#16a34a",
                      "Minimize total out-of-pocket cost: fares (Presto vs cash), parking, gas, bike share fees. Free options "
                      "are great but must still be practical (not absurdly slow) and respect bags/deadline."),
-    "fastest": Profile("fastest", "Fastest", "#dc2626",
+    "fastest": Profile("fastest", "Efficient", "#dc2626",
                        "Minimize door-to-door time. Consider every mode the user can actually use, including driving and "
                        "park-and-ride if they have a car, and weigh traffic at the departure hour."),
-    "green": Profile("green", "Greenest", "#0d9488",
+    "green": Profile("green", "Environmental", "#0d9488",
                      "Minimize CO2e emissions: prefer walking, biking, e-bikes and transit over driving, but keep the trip "
                      "practical (not several times slower than alternatives) and bag-friendly."),
     "best": Profile("best", "Best overall", "#7c3aed",
