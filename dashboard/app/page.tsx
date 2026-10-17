@@ -7,6 +7,7 @@ import InsightsPanel from "@/components/InsightsPanel";
 import RouteCard from "@/components/RouteCard";
 import BotDrawer from "@/components/BotDrawer";
 import LayerToggles from "@/components/LayerToggles";
+import MapLegend from "@/components/MapLegend";
 import type { BikeStation, MapPadding } from "@/components/RouteMap";
 
 const RouteMap = dynamic(() => import("@/components/RouteMap"), { ssr: false });
@@ -182,8 +183,9 @@ export default function Home() {
         />
       </div>
 
-      <div className="absolute top-3 right-3 z-10 md:top-4 md:right-4">
+      <div className="absolute top-3 right-3 z-10 flex flex-col items-end gap-2 md:top-4 md:right-4 md:items-stretch">
         <LayerToggles onTtc={setShowTtc} onBikes={setBikeStations} />
+        <MapLegend found={{ cheap: !!bots.cheap.route, fastest: !!bots.fastest.route, green: !!bots.green.route, best: !!bots.best.route }} highlight={highlight} />
       </div>
 
       {/* One nav element: bottom tab bar on phones, slim left rail on wide screens */}
