@@ -8,3 +8,4 @@ data/completegtfs.zip
 data/screenshots/
 data/*.log
 data/geocode_cache.json
+data/4ward.db
