@@ -23,6 +23,7 @@ const COLORS: Record<string, string> = {
   drive: "#dc2626",
   rideshare: "#db2777",
   transit_rail: "#2563eb",
+  transit_rail_lowwalk: "#0891b2",
   transit_bus: "#7c3aed",
   park_ride: "#ea580c",
 };
@@ -85,7 +86,16 @@ function Place({ id, label, value, onChange }: { id: string; label: string; valu
   );
 }
 
+const BOT_BADGE: Record<string, { name: string; color: string }> = {
+  cheap: { name: "Cheapest bot", color: "#16a34a" },
+  fastest: { name: "Fastest bot", color: "#dc2626" },
+  green: { name: "Greenest bot", color: "#0d9488" },
+  best: { name: "Best-overall bot", color: "#7c3aed" },
+};
+
 export default function Planner() {
+  const [bot, setBot] = useState<string | null>(null);
+  useEffect(() => setBot(new URLSearchParams(window.location.search).get("bot")), []);
   const [origin, setOrigin] = useState("");
   const [destination, setDestination] = useState("");
   const [c, setC] = useState<Constraints>({
@@ -148,6 +158,11 @@ export default function Planner() {
     <div className="flex h-screen w-screen flex-col bg-zinc-100 text-zinc-900 md:flex-row" data-testid="planner">
       <aside className="flex w-full flex-col gap-3 overflow-y-auto bg-white p-4 md:w-[26rem]">
         <h1 className="text-lg font-bold">4WARD route planner</h1>
+        {bot && BOT_BADGE[bot] && (
+          <p data-testid="bot-badge" className="rounded px-2 py-1 text-xs font-semibold text-white" style={{ background: BOT_BADGE[bot].color }}>
+            Driven by: {BOT_BADGE[bot].name}
+          </p>
+        )}
         <Place id="origin" label="From" value={origin} onChange={setOrigin} />
         <Place id="destination" label="To" value={destination} onChange={setDestination} />
 

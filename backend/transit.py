@@ -56,7 +56,7 @@ def _stop_ll(lines, node):
     return (s["lat"], s["lon"])
 
 
-def _rail_route(a, b):
+def _rail_route(a, b, walk_weight: float = 1.0):
     lines, nodes, index, transfers = _net()
     # access candidates
     acc = []
@@ -70,7 +70,7 @@ def _rail_route(a, b):
     prev: dict = {}
     pq = []
     for i, d in acc:
-        t = d * 1.3 / (WALK_KMH / 3600) + lines[nodes[i][0]]["headway_min"] * 30
+        t = d * 1.3 / (WALK_KMH / 3600) * walk_weight + lines[nodes[i][0]]["headway_min"] * 30
         if t < dist.get(i, 1e18):
             dist[i] = t
             prev[i] = ("access", None)
@@ -84,7 +84,7 @@ def _rail_route(a, b):
         ln = lines[li]
         egress_d = haversine_km(_stop_ll(lines, nodes[i]), b)
         if egress_d <= MAX_ACCESS_KM:
-            total = t + egress_d * 1.3 / (WALK_KMH / 3600)
+            total = t + egress_d * 1.3 / (WALK_KMH / 3600) * walk_weight
             if total < best[0]:
                 best = (total, i)
         if si + 1 < len(ln["stops"]):
@@ -119,8 +119,8 @@ def _rail_route(a, b):
     return {"path": path, "segments": [s for s in segments if len(s["nodes"]) >= 2], "total_s": best[0]}
 
 
-async def rail_option(a, b, hour: int) -> dict | None:
-    r = _rail_route(a, b)
+async def rail_option(a, b, hour: int, walk_weight: float = 1.0) -> dict | None:
+    r = _rail_route(a, b, walk_weight)
     if not r or not r["segments"]:
         return None
     lines, nodes, _, _ = _net()
@@ -152,7 +152,8 @@ async def rail_option(a, b, hour: int) -> dict | None:
     legs.append({"mode": "walk", "label": "Walk to destination", "from": prev_end, "to": list(b),
                  "distance_km": w2["distance_km"], "duration_s": w2["duration_s"], "geometry": w2["geometry"],
                  "provenance": w2["provenance"]})
-    return {"kind": "transit_rail", "legs": legs, "boardings": len(r["segments"])}
+    return {"kind": "transit_rail", "legs": legs, "boardings": len(r["segments"]),
+            "signature": (r["segments"][0]["nodes"][0], r["segments"][-1]["nodes"][-1])}
 
 
 async def bus_option(a, b, hour: int) -> dict:

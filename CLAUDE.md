@@ -81,12 +81,16 @@ Each bot has a profile (objective weights) and a status (SCANNING, ROUTING, DONE
   tests/          fare tests, routing tests, bot smoke tests
 ```
 
-## Commands (fill in as they get created)
+## Commands
 
-- Backend: `uvicorn backend.main:app --reload`
-- Dashboard: `cd dashboard && npm run dev`
-- Bots: `python -m bots.run --prompt "..."`
+- Start everything (backend :8000 + dashboard :3000, background): `powershell -File start.ps1` (`-Prod` for a production build)
+- Backend only: `.venv\Scripts\python -m uvicorn backend.main:app --port 8000` (no --reload: Playwright needs the Proactor loop on Windows)
+- Dashboard only: `cd dashboard && npm run dev`
+- Bots (CLI): `python -m bots.run --prompt "..." --verbose`; five-prompt dry run: `python -m bots.e2e`
+- Ingest feeds: `python -m backend.ingest --once | --loop 30 | --record | --replay | --seed-sim 48`
+- DB: `python -m backend.db --init` (Tiger Data schema from db/schema.sql)
 - Tests: `pytest`
+- Next.js here is v16 with breaking changes: read `dashboard/node_modules/next/dist/docs/` before changing Next APIs.
 
 ## Definition of done for the demo
 

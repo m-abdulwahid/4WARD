@@ -73,7 +73,7 @@ async def test_fallback_to_rule_brain_when_gemini_breaks(monkeypatch):
     b = FallbackBrain("cheap", user)
 
     class Broken:
-        async def next_action(self, page, history):
+        async def next_actions(self, page, history):
             raise RuntimeError("quota exceeded")
 
     b.gemini = Broken()
@@ -81,18 +81,35 @@ async def test_fallback_to_rule_brain_when_gemini_breaks(monkeypatch):
     assert a["brain"] == "rule" and b.fallbacks == 1
 
     class Garbage:
-        async def next_action(self, page, history):
-            return {"action": "click", "testid": "does-not-exist"}
+        async def next_actions(self, page, history):
+            return [{"action": "click", "testid": "does-not-exist"}]
 
     b.gemini = Garbage()
     assert (await b.next_action(PAGE, []))["brain"] == "rule"
 
     class Good:
-        async def next_action(self, page, history):
-            return {"action": "click", "testid": "compute-route", "reason": "go"}
+        calls = 0
+
+        async def next_actions(self, page, history):
+            Good.calls += 1
+            return [{"action": "click", "testid": "compute-route", "reason": "go"},
+                    {"action": "type", "testid": "origin-input", "text": "x"}]
 
     b.gemini = Good()
     assert (await b.next_action(PAGE, []))["brain"] == "gemini"
+    assert (await b.next_action(PAGE, []))["testid"] == "origin-input"   # second action comes from the queued plan
+    assert Good.calls == 1                                                # one API call served two steps
+
+
+def test_gemini_brain_builds_offline(monkeypatch):
+    """Constructing the real brain and its schema must not need the network."""
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+    from google.genai import types
+
+    from bots.brain import GeminiBrain, Plan
+
+    GeminiBrain("fastest", {"origin": "a", "destination": "b", "constraints": {}})
+    types.GenerateContentConfig(response_mime_type="application/json", response_schema=Plan, temperature=0)
 
 
 @pytest.mark.parametrize("text,o,d", [

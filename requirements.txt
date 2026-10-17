@@ -1,0 +1,13 @@
+fastapi==0.143.3
+google-genai==2.31.0
+gtfs-realtime-bindings==3.0.0
+httpx==0.28.1
+playwright==1.64.0
+psycopg==3.3.6
+psycopg-binary==3.3.6
+pydantic==2.14.1
+pytest==9.1.1
+pytest-asyncio==1.4.0
+python-dotenv==1.2.4
+uvicorn==0.54.0
+websockets==16.1.1

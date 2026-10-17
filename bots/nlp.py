@@ -53,7 +53,7 @@ def parse_rules(text: str) -> dict:
             (p1, a), (p2, b) = hits[0], hits[1]
             if role(p1) == "dest" or role(p2) == "orig":
                 a, b = b, a
-            origin, destination = a.title(), b.title()
+            origin, destination = (t[low.find(x):low.find(x) + len(x)] for x in (a, b))  # keep the user's casing
     origin, destination = (re.sub(r"^(?:the|my)\s+", "", x, flags=re.I) for x in (origin, destination))
     c: dict = {"bags": 0, "no_presto": False, "has_car": False, "ev": False, "has_bike": False,
                "has_ebike": False, "avoid_stairs": False}

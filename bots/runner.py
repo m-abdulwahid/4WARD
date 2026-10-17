@@ -105,6 +105,7 @@ async def run_bot(browser: Browser, key: str, user: dict, base_url: str, emit: E
         else:
             result["error"] = f"hit step cap ({max_steps})"
         result["fallbacks"] = brain.fallbacks
+        result["gemini_calls"] = brain.gemini_calls
         result["brain_error"] = brain.last_error
     except Exception as e:
         result["error"] = f"{type(e).__name__}: {str(e)[:200]}"

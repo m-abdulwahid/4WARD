@@ -170,7 +170,17 @@ async def plan(origin: tuple[float, float], dest: tuple[float, float], c: Constr
                                [f"Fare ${fare:.2f} is an ESTIMATE (no surge pricing modeled)", "Door to door, easy with bags"]))
 
         elif m == "transit":
-            for opt in (await transit.rail_option(origin, dest, hour), await transit.bus_option(origin, dest, hour)):
+            rail = await transit.rail_option(origin, dest, hour)
+            low = await transit.rail_option(origin, dest, hour, walk_weight=3.0)
+            options = [rail]
+            def _walk(o):
+                return sum(l["distance_km"] for l in o["legs"] if l["mode"] == "walk")
+
+            if low and rail and low["signature"] != rail["signature"] and _walk(low) <= _walk(rail) - 0.15:
+                low["kind"] = "transit_rail_lowwalk"
+                options.append(low)
+            options.append(await transit.bus_option(origin, dest, hour))
+            for opt in options:
                 if not opt:
                     continue
                 legs = opt["legs"]
@@ -187,11 +197,11 @@ async def plan(origin: tuple[float, float], dest: tuple[float, float], c: Constr
                 for l in legs:
                     if l["mode"] in ("bus",):
                         l["duration_s"] = l["duration_s"]  # estimated bus already includes traffic factor
-                kind = "rail" if opt["kind"] == "transit_rail" else "bus"
+                kind = {"transit_rail": "rail", "transit_rail_lowwalk": "rail_lowwalk"}.get(opt["kind"], "bus")
                 notes = [("Presto" if not c.no_presto else "Cash fare") + f" ${fare:.2f}" + (", transfers free within 2 h" if opt["boardings"] > 1 else "")]
                 if kind == "bus":
                     notes.append("Bus leg is an ESTIMATE (no stop-level schedule routing)")
-                out.append(_finish(f"transit_{kind}", f"TTC {'subway/streetcar' if kind == 'rail' else 'bus'}", legs, c, depart, hour,
+                out.append(_finish(f"transit_{kind}", {"rail": "TTC subway/streetcar", "rail_lowwalk": "TTC subway (less walking)", "bus": "TTC bus"}[kind], legs, c, depart, hour,
                                    max(0, opt["boardings"] - 1), notes))
 
         elif m == "park_ride":

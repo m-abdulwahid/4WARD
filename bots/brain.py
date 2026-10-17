@@ -4,6 +4,7 @@ GeminiBrain asks Gemini for the next action as validated JSON. RuleBrain is a de
 state-reconciler used when there is no key, and as a per-step fallback when Gemini errors or
 returns something invalid (so one bad model response never kills a bot).
 """
+import asyncio
 import json
 import os
 from typing import Literal
@@ -92,18 +93,25 @@ class RuleBrain:
 SYSTEM = """You operate a route-planner web dashboard through a browser to find ONE route for a user.
 You are the "{name}" bot. Your objective: {objective}
 
-Each turn you see the user's request, the current page (controls with data-testid, their state, and any computed route
-options) and your recent actions. Reply with exactly ONE next action as JSON:
+Each call you see the user's request, the current page (controls with data-testid, their state, and any computed route
+options) and your recent actions. Reply with a JSON plan: {{"actions":[...]}} where each action is one of
   {{"action":"click","testid":"..."}} | {{"action":"type","testid":"...","text":"..."}} | {{"action":"wait"}} |
-  {{"action":"finish","route_id":"..."}}   (+ a short "reason")
-Rules:
-- Use only testids listed in `controls`. Typing replaces the field's value.
-- Typical flow: type origin, type destination, turn ON only the travel modes worth exploring for YOUR objective (aria-pressed true = ON),
-  turn on constraint toggles that match the user's facts (has_car, no_presto, ...), set bags/times, click compute-route,
-  then click select-route-<id> for the best option for your objective, click confirm-route, then finish with that route_id.
-- Never pick a route marked unavailable, one that misses the deadline (if a deadline-meeting route exists), or an impractical one.
-- Be efficient: do not repeat actions that already took effect.
+  {{"action":"finish","route_id":"..."}}   (each with a short "reason")
+Actions run in order in the browser. Rules:
+- Use only testids listed in `controls`. Typing replaces the field's value. aria-pressed "true" means a toggle is ON.
+- PHASE 1 (planner_state idle): plan every setup action in one go - type origin and destination, turn ON only the travel modes
+  worth exploring for YOUR objective (and OFF the rest), turn on constraint toggles matching the user's facts (has_car, no_presto,
+  ...), set bags and times - and END the plan with click compute-route. Do not plan anything after compute-route.
+- PHASE 2 (planner_state done, route_options present): choose the best option for YOUR objective, then plan:
+  click select-route-<id>, click confirm-route, finish with that route_id.
+- Never pick a route that is unavailable, misses the deadline (if a deadline-meeting route exists), or is impractical
+  (e.g. hours slower than alternatives, or hostile to the user's bags).
+- Do not repeat actions that already took effect.
 """
+
+
+class Plan(BaseModel):
+    actions: list[Action]
 
 
 class GeminiBrain:
@@ -118,7 +126,7 @@ class GeminiBrain:
         prof = PROFILES[profile_key]
         self.system = SYSTEM.format(name=prof.name, objective=prof.objective)
 
-    async def next_action(self, page: dict, history: list[dict]) -> dict:
+    async def next_actions(self, page: dict, history: list[dict]) -> list[dict]:
         from google.genai import types
 
         brief = {
@@ -132,22 +140,34 @@ class GeminiBrain:
                               for c in page["candidates"]],
             "recent_actions": history[-6:],
         }
-        resp = await self.client.aio.models.generate_content(
-            model=self.model,
-            contents=json.dumps(brief, default=str),
-            config=types.GenerateContentConfig(system_instruction=self.system, response_mime_type="application/json",
-                                               response_schema=Action, temperature=0),
-        )
-        return json.loads(resp.text)
+        cfg = types.GenerateContentConfig(system_instruction=self.system, response_mime_type="application/json",
+                                          response_schema=Plan, temperature=0)
+        for attempt in (1, 2):  # one retry for transient 429/5xx
+            try:
+                resp = await self.client.aio.models.generate_content(model=self.model, contents=json.dumps(brief, default=str), config=cfg)
+                break
+            except Exception:
+                if attempt == 2:
+                    raise
+                await asyncio.sleep(2.0)
+        acts = json.loads(resp.text)["actions"][:10]
+        for i, a in enumerate(acts):  # nothing after the first compute: results must be seen before choosing
+            if a.get("action") == "click" and a.get("testid") == "compute-route":
+                acts = acts[: i + 1]
+                break
+        return acts
 
 
 class FallbackBrain:
-    """Gemini first; on any error/invalid action fall back to the rule brain for that step."""
+    """Gemini plans a batch of actions per call (few API calls, rate-limit friendly); every action is validated against the
+    live page right before it runs. Any error/invalid action drops the plan and the rule brain covers that step."""
 
     def __init__(self, profile_key: str, user: dict):
         self.rule = RuleBrain(profile_key, user)
         self.gemini = None
+        self.queue: list[dict] = []
         self.fallbacks = 0
+        self.gemini_calls = 0
         self.last_error = ""
         if os.environ.get("GEMINI_API_KEY") and os.environ.get("BOTS_BRAIN", "auto") != "rule":
             try:
@@ -159,13 +179,18 @@ class FallbackBrain:
     async def next_action(self, page: dict, history: list[dict]) -> dict:
         if self.gemini:
             try:
-                a = await self.gemini.next_action(page, history)
+                if not self.queue:
+                    self.gemini_calls += 1
+                    self.queue = await self.gemini.next_actions(page, history)
+                    if not self.queue:
+                        raise ValueError("empty plan")
+                a = self.queue.pop(0)
                 validate(a, page)
-                # a finish before anything is confirmed is premature: let the rule brain drive instead
-                if not (a["action"] == "finish" and not page["confirmed"]):
-                    return {**a, "brain": "gemini"}
-                raise ValueError("finish before confirm")
+                if a["action"] == "finish" and not page["confirmed"]:
+                    raise ValueError("finish before confirm")
+                return {**a, "brain": "gemini"}
             except Exception as e:
+                self.queue.clear()
                 self.fallbacks += 1
                 self.last_error = str(e)[:200]
         return {**self.rule.next_action(page, history), "brain": "rule"}
