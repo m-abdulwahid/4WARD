@@ -45,7 +45,8 @@ async def _frames(page: Page, key: str, cb: Emit | None, stop: asyncio.Event, fp
 
 
 async def run_bot(ctx: BrowserContext, key: str, user: dict, base_url: str, emit: Emit | None = None,
-                  max_steps: int = 24, timeout_s: float = 120, stream_frames: bool = True) -> dict:
+                  max_steps: int = 24, timeout_s: float = 120, stream_frames: bool = True,
+                  avoid_ids: set[str] | None = None) -> dict:
     """user = {"origin": str, "destination": str, "constraints": {...}}. Returns the bot's result dict.
 
     ctx is a browser context the bot owns exclusively (a fresh local context, or a Steel session's
@@ -65,7 +66,7 @@ async def run_bot(ctx: BrowserContext, key: str, user: dict, base_url: str, emit
         await page.wait_for_function("window.__4ward !== undefined", timeout=60000)  # React hydrated
         if stream_frames:
             frame_task = asyncio.create_task(_frames(page, key, emit, stop, 2.5))
-        brain = FallbackBrain(key, user)
+        brain = FallbackBrain(key, user, avoid_ids=avoid_ids)
         result["brain"] = brain.name
         history: list[dict] = []
         for n in range(1, max_steps + 1):

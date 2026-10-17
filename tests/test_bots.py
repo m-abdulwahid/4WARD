@@ -1,6 +1,6 @@
 import pytest
 
-from bots import nlp, scoring
+from bots import critic, nlp, scoring
 from bots.brain import FallbackBrain, RuleBrain, validate
 from bots.profiles import modes_for
 
@@ -64,6 +64,49 @@ def test_rule_brain_types_origin_first():
     user = {"origin": "Union Station", "destination": "CN Tower", "constraints": {}}
     a = RuleBrain("cheap", user).next_action(PAGE, [])
     assert a["action"] == "type" and a["testid"] == "origin-input" and a["text"] == "Union Station"
+
+
+def test_rule_brain_respects_avoid_ids():
+    """Diversity rule: a bot told to avoid an id picks the next-best candidate instead."""
+    user = {"origin": "a", "destination": "b", "constraints": {"bags": 0}}
+    page = {**PAGE, "state": "done", "selected": None, "confirmed": None, "candidates": CANDS}
+    top = RuleBrain("cheap", user).next_action(page, [])
+    assert top["testid"] == "select-route-rail"
+    avoided = RuleBrain("cheap", user, avoid_ids={"rail"}).next_action(page, [])
+    assert avoided["testid"] != "select-route-rail"
+
+
+def test_rule_brain_avoid_ids_falls_back_when_pool_empties():
+    """If every candidate is avoided, don't strand the bot with no choice at all."""
+    user = {"origin": "a", "destination": "b", "constraints": {"bags": 0}}
+    page = {**PAGE, "state": "done", "selected": None, "confirmed": None, "candidates": CANDS}
+    all_ids = {c["id"] for c in CANDS}
+    a = RuleBrain("cheap", user, avoid_ids=all_ids).next_action(page, [])
+    assert a["action"] == "click" and a["testid"].startswith("select-route-")
+
+
+def test_critic_flags_deadline_and_walk_and_bags():
+    assert critic.flags_for(None, {}) == []
+    missed = {"meets_deadline": False, "arrive": "17:42", "violates": [], "bag_friendliness": 1.0}
+    assert "17:42" in critic.flags_for(missed, {"arrive_by": "17:00"})[0]
+    over_walk = {"meets_deadline": True, "violates": ["max_walk"], "walk_m": 4000, "bag_friendliness": 1.0}
+    assert "4000" in critic.flags_for(over_walk, {})[0]
+    bag_hostile = {"meets_deadline": True, "violates": [], "bag_friendliness": 0.1}
+    assert critic.flags_for(bag_hostile, {"bags": 2})
+    assert critic.flags_for(bag_hostile, {"bags": 0}) == []
+    clean = {"meets_deadline": True, "violates": [], "bag_friendliness": 1.0}
+    assert critic.flags_for(clean, {"bags": 2, "arrive_by": "17:00"}) == []
+
+
+def test_critic_apply_prepends_notes_and_sets_violations():
+    results = [{"bot": "cheap", "route": {"meets_deadline": False, "arrive": "18:00", "violates": [],
+                                          "bag_friendliness": 1.0, "notes": ["Presto $3.30"]}},
+               {"bot": "fastest", "route": None}]
+    critic.apply(results, {"arrive_by": "17:00"})
+    assert results[0]["critic_violations"]
+    assert results[0]["route"]["notes"][0].startswith("⚠")
+    assert results[0]["route"]["notes"][-1] == "Presto $3.30"
+    assert results[1]["critic_violations"] == []
 
 
 @pytest.mark.asyncio

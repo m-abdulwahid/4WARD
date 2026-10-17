@@ -48,9 +48,10 @@ def validate(a: dict, page: dict) -> Action:
 class RuleBrain:
     name = "rule"
 
-    def __init__(self, profile_key: str, user: dict):
+    def __init__(self, profile_key: str, user: dict, avoid_ids: set[str] | None = None):
         self.p, self.user = profile_key, user
         self.want_modes = modes_for(profile_key, user["constraints"])
+        self.avoid_ids = avoid_ids or set()
 
     def next_action(self, page: dict, history: list[dict]) -> dict:
         u, c = self.user, self.user["constraints"]
@@ -82,7 +83,8 @@ class RuleBrain:
         if page["confirmed"]:
             return {"action": "finish", "route_id": page["confirmed"], "reason": "route confirmed"}
         if not page["selected"]:
-            top = scoring.best(self.p, page["candidates"], c)
+            pool = [cd for cd in page["candidates"] if cd["id"] not in self.avoid_ids] or page["candidates"]
+            top = scoring.best(self.p, pool, c)
             if not top:
                 return {"action": "finish", "route_id": None, "reason": "no usable route found"}
             return {"action": "click", "testid": f"select-route-{top['id']}",
@@ -117,18 +119,20 @@ class Plan(BaseModel):
 class GeminiBrain:
     name = "gemini"
 
-    def __init__(self, profile_key: str, user: dict):
+    def __init__(self, profile_key: str, user: dict, avoid_ids: set[str] | None = None):
         from google import genai
 
         self.p, self.user = profile_key, user
         self.client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
         self.model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+        self.avoid_ids = avoid_ids or set()
         prof = PROFILES[profile_key]
         self.system = SYSTEM.format(name=prof.name, objective=prof.objective)
 
     async def next_actions(self, page: dict, history: list[dict]) -> list[dict]:
         from google.genai import types
 
+        options = [c for c in page["candidates"] if c["id"] not in self.avoid_ids] or page["candidates"]
         brief = {
             "request": self.user,
             "controls": [{k: v for k, v in c.items() if v not in (None, "")} for c in page["controls"]
@@ -137,7 +141,7 @@ class GeminiBrain:
             "selected_route": page["selected"], "confirmed_route": page["confirmed"],
             "route_options": [{k: c.get(k) for k in ("id", "available", "reason", "duration_min", "cost", "co2_kg", "transfers",
                                                        "walk_m", "bag_friendliness", "meets_deadline") if c.get(k) is not None}
-                              for c in page["candidates"]],
+                              for c in options],
             "recent_actions": history[-6:],
         }
         cfg = types.GenerateContentConfig(system_instruction=self.system, response_mime_type="application/json",
@@ -162,8 +166,8 @@ class FallbackBrain:
     """Gemini plans a batch of actions per call (few API calls, rate-limit friendly); every action is validated against the
     live page right before it runs. Any error/invalid action drops the plan and the rule brain covers that step."""
 
-    def __init__(self, profile_key: str, user: dict):
-        self.rule = RuleBrain(profile_key, user)
+    def __init__(self, profile_key: str, user: dict, avoid_ids: set[str] | None = None):
+        self.rule = RuleBrain(profile_key, user, avoid_ids)
         self.gemini = None
         self.queue: list[dict] = []
         self.fallbacks = 0
@@ -171,7 +175,7 @@ class FallbackBrain:
         self.last_error = ""
         if os.environ.get("GEMINI_API_KEY") and os.environ.get("BOTS_BRAIN", "auto") != "rule":
             try:
-                self.gemini = GeminiBrain(profile_key, user)
+                self.gemini = GeminiBrain(profile_key, user, avoid_ids)
             except Exception as e:
                 self.last_error = str(e)[:200]
         self.name = "gemini" if self.gemini else "rule"
