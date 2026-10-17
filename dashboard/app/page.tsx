@@ -9,6 +9,7 @@ import BotDrawer from "@/components/BotDrawer";
 import LayerToggles from "@/components/LayerToggles";
 import MapLegend from "@/components/MapLegend";
 import { ModeKey, legColor, legMode } from "@/lib/modes";
+import { DbStatus, TONE, dbLabel } from "@/lib/dataSource";
 import type { BikeStation, MapPadding } from "@/components/RouteMap";
 
 const RouteMap = dynamic(() => import("@/components/RouteMap"), { ssr: false });
@@ -76,7 +77,9 @@ export default function Home() {
   const [error, setError] = useState("");
   const [focus, setFocus] = useState<BotKey | null>(null);
   const [chosen, setChosen] = useState<BotKey | null>(null);
-  const [health, setHealth] = useState<{ replay: boolean; gemini_configured: boolean } | null>(null);
+  // undefined: still checking; null: backend unreachable
+  const [health, setHealth] = useState<{ replay: boolean; gemini_configured: boolean } | null | undefined>(undefined);
+  const [dbStatus, setDbStatus] = useState<DbStatus | null>(null);
   const [elapsed, setElapsed] = useState(0);
   const [budget, setBudget] = useState<number | null>(null);
   const [showTtc, setShowTtc] = useState(false);
@@ -90,6 +93,11 @@ export default function Home() {
 
   useEffect(() => {
     fetch(`${API}/health`).then((r) => r.json()).then(setHealth).catch(() => setHealth(null));
+    // the chart endpoint reports which database it actually read (Tiger Data or the local fallback)
+    fetch(`${API}/insights/bikes?hours=1`)
+      .then((r) => r.json())
+      .then((d) => setDbStatus({ backend: d.backend, tiger: d.tiger }))
+      .catch(() => setDbStatus(null));
   }, []);
   useEffect(() => {
     if (!running) return;
@@ -257,16 +265,26 @@ export default function Home() {
         >
           <span aria-hidden className="h-1.5 w-10 rounded-full bg-zinc-300" />
         </button>
-        <header className="flex shrink-0 items-center justify-between gap-2 px-4 pt-1 pb-2 md:px-5 md:pt-4">
+        <header className="shrink-0 px-4 pt-1 pb-2 md:px-5 md:pt-4">
           <h1 className="text-lg font-semibold tracking-tight">{panelTitle}</h1>
-          {health && (
-            <div className="flex gap-1.5 text-[11px] font-medium">
-              <span className={`rounded-full px-2 py-0.5 ${health.gemini_configured ? "bg-emerald-50 text-emerald-800" : "bg-zinc-100 text-zinc-600"}`}>
-                {health.gemini_configured ? "Gemini bots" : "Rule-based bots"}
-              </span>
-              <span className={`rounded-full px-2 py-0.5 ${health.replay ? "bg-amber-50 text-amber-800" : "bg-zinc-100 text-zinc-600"}`}>{health.replay ? "Replay data" : "Live data"}</span>
-            </div>
-          )}
+          {/* Honest status: where data comes from right now. */}
+          <ul aria-label="Data status" data-testid="data-status" className="mt-1.5 flex flex-wrap gap-1.5 text-[11px] font-medium">
+            {health === undefined ? null : health === null ? (
+              <li className={`rounded-full px-2 py-0.5 ${TONE.warn}`}>Backend offline</li>
+            ) : (
+              <>
+                <li data-testid="status-data" className={`rounded-full px-2 py-0.5 ${health.replay ? "bg-amber-50 text-amber-900" : TONE.neutral}`}>
+                  {health.replay ? "Replay data" : "Live data"}
+                </li>
+                <li data-testid="status-db" title={dbLabel(dbStatus).long} className={`rounded-full px-2 py-0.5 ${TONE[dbLabel(dbStatus).tone]}`}>
+                  {dbLabel(dbStatus).chip}
+                </li>
+                <li className={`rounded-full px-2 py-0.5 ${health.gemini_configured ? TONE.good : TONE.neutral}`}>
+                  {health.gemini_configured ? "Gemini bots" : "Rule-based bots"}
+                </li>
+              </>
+            )}
+          </ul>
         </header>
 
         {/* MAP tab */}
