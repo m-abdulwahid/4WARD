@@ -8,6 +8,7 @@ import RouteCard from "@/components/RouteCard";
 import BotDrawer from "@/components/BotDrawer";
 import LayerToggles from "@/components/LayerToggles";
 import MapLegend from "@/components/MapLegend";
+import { ModeKey, legColor, legMode } from "@/lib/modes";
 import type { BikeStation, MapPadding } from "@/components/RouteMap";
 
 const RouteMap = dynamic(() => import("@/components/RouteMap"), { ssr: false });
@@ -146,17 +147,31 @@ export default function Home() {
       BOTS.filter((b) => bots[b.key].route).map((b) => ({
         id: b.key,
         color: b.color,
+        label: b.name,
         candidate: bots[b.key].route as Candidate,
         emphasized: highlight ? highlight === b.key : true,
       })),
     [bots, highlight],
   );
+  // Modes the finished routes use, with the colour each is drawn in (TTC line colour for transit).
+  const usedModes = useMemo(() => {
+    const out: Partial<Record<ModeKey, string>> = {};
+    done.forEach((b) => {
+      const c = bots[b.key].route as Candidate;
+      c.legs.forEach((l) => {
+        const m = legMode(l, c.id);
+        out[m] ??= legColor(l, m);
+      });
+    });
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bots]);
   const first = done[0] ? bots[done[0].key].route : null;
 
   // keep routes inside the part of the map that is not covered by the panel / sheet
   const mapPadding: MapPadding = wide
-    ? { top: 60, right: 70, bottom: 60, left: RAIL_W + PANEL_W[tab] + 40 }
-    : { top: 50, right: 30, bottom: typeof window === "undefined" ? 400 : Math.round(window.innerHeight * (sheetFull ? 0.8 : 0.46)) + 110, left: 30 };
+    ? { top: 60, right: 270, bottom: 60, left: RAIL_W + PANEL_W[tab] + 40 } // right: Layers + Legend column (224px + gaps)
+    : { top: 110, right: 30, bottom: typeof window === "undefined" ? 400 : Math.round(window.innerHeight * (sheetFull ? 0.8 : 0.46)) + 110, left: 30 };
 
   const onTabKey = (e: React.KeyboardEvent, i: number) => {
     const dir = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 }[e.key];
@@ -178,6 +193,7 @@ export default function Home() {
           origin={first ? first.legs[0]?.from : null}
           destination={first ? first.legs[first.legs.length - 1]?.to : null}
           padding={mapPadding}
+          colorBy="mode"
           showTtc={showTtc}
           bikeStations={bikeStations}
         />
@@ -185,7 +201,7 @@ export default function Home() {
 
       <div className="absolute top-3 right-3 z-10 flex flex-col items-end gap-2 md:top-4 md:right-4 md:items-stretch">
         <LayerToggles onTtc={setShowTtc} onBikes={setBikeStations} />
-        <MapLegend found={{ cheap: !!bots.cheap.route, fastest: !!bots.fastest.route, green: !!bots.green.route, best: !!bots.best.route }} highlight={highlight} />
+        <MapLegend found={{ cheap: !!bots.cheap.route, fastest: !!bots.fastest.route, green: !!bots.green.route, best: !!bots.best.route }} highlight={highlight} modes={usedModes} />
       </div>
 
       {/* One nav element: bottom tab bar on phones, slim left rail on wide screens */}

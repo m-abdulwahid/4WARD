@@ -3,12 +3,27 @@ import { useEffect, useRef } from "react";
 import * as maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { Candidate } from "@/lib/api";
+import { MODES, iconSvg, inkOn, legColor, legMode } from "@/lib/modes";
 
-export type MapRoute = { id: string; color: string; candidate: Candidate; emphasized?: boolean };
+export type MapRoute = { id: string; color: string; candidate: Candidate; emphasized?: boolean; label?: string };
 export type MapPadding = { top: number; right: number; bottom: number; left: number };
 export type BikeStation = { id: string; name: string; lat: number; lon: number; bikes: number; ebikes: number; docks: number };
 
 const EMPTY: GeoJSON.FeatureCollection = { type: "FeatureCollection", features: [] };
+
+/** Point a fraction f of the way along a line (by length, so straight 2-point legs work too). */
+function along(coords: [number, number][], f: number): [number, number] {
+  const seg = coords.slice(1).map((c, i) => Math.hypot(c[0] - coords[i][0], c[1] - coords[i][1]));
+  let left = seg.reduce((a, b) => a + b, 0) * f;
+  for (let i = 0; i < seg.length; i++) {
+    if (left <= seg[i] || i === seg.length - 1) {
+      const t = seg[i] ? Math.min(1, left / seg[i]) : 0;
+      return [coords[i][0] + (coords[i + 1][0] - coords[i][0]) * t, coords[i][1] + (coords[i + 1][1] - coords[i][1]) * t];
+    }
+    left -= seg[i];
+  }
+  return coords[0];
+}
 
 // Turbopack cannot bundle the ESM worker; serve the copy in /public instead.
 maplibregl.setWorkerUrl("/maplibre-gl-worker.mjs");
@@ -23,6 +38,7 @@ export default function RouteMap({
   padding = NO_PAD,
   showTtc = false,
   bikeStations = null,
+  colorBy = "route",
 }: {
   routes: MapRoute[];
   origin?: [number, number] | null; // [lat, lon]
@@ -30,6 +46,7 @@ export default function RouteMap({
   padding?: MapPadding; // space covered by floating panels, so routes are fitted into the visible part
   showTtc?: boolean; // TTC subway/streetcar lines from /ttc-lines.geojson
   bikeStations?: BikeStation[] | null; // null hides the Bike Share layer
+  colorBy?: "route" | "mode"; // "route": one colour per route (planner); "mode": each leg by transport mode (home)
 }) {
   const el = useRef<HTMLDivElement>(null);
   const map = useRef<maplibregl.Map | null>(null);
@@ -122,6 +139,10 @@ export default function RouteMap({
       const bounds = new maplibregl.LngLatBounds();
       // dimmed routes first so the highlighted one is drawn on top
       const ordered = [...routes].sort((a, b) => Number(a.emphasized !== false) - Number(b.emphasized !== false));
+      const byMode = colorBy === "mode";
+      const anyDim = routes.some((r) => r.emphasized === false);
+      const distinct = new Set(routes.map((r) => r.candidate.id)).size;
+      const iconsDone = new Set<string>(); // routes sharing a candidate draw identical legs: one set of icons is enough
       ordered.forEach((r) => {
         const dim = r.emphasized === false;
         r.candidate.legs.forEach((leg, i) => {
@@ -130,6 +151,47 @@ export default function RouteMap({
           coords.forEach((c) => bounds.extend(c));
           const id = `rt-${r.id}-${i}`;
           m.addSource(id, { type: "geojson", data: { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: coords } } });
+          const mode = legMode(leg, r.candidate.id);
+          const st = MODES[mode];
+          const walk = mode === "walk";
+          if (byMode) {
+            // Mode colours stay visible when dimmed: thinner and lighter, but the same hue and pattern.
+            const w = dim ? Math.max(2.5, st.width * 0.55) : st.width;
+            if (!walk) {
+              m.addLayer({
+                id: `${id}-casing`,
+                type: "line",
+                source: id,
+                layout: { "line-cap": "round", "line-join": "round" },
+                paint: { "line-color": st.casing, "line-width": w + (dim ? 2 : 3.5), "line-opacity": dim ? 0.5 : 0.95 },
+              });
+            }
+            m.addLayer({
+              id,
+              type: "line",
+              source: id,
+              layout: { "line-cap": "round", "line-join": "round" },
+              paint: {
+                "line-color": legColor(leg, mode),
+                "line-width": w,
+                "line-opacity": dim ? 0.5 : 1,
+                ...(st.dash ? { "line-dasharray": st.dash } : {}),
+              },
+            });
+            // Mode icon in the middle of each leg of the route in focus (skip legs too short to see).
+            const iconKey = `${r.candidate.id}-${i}`;
+            if (!dim && (anyDim || distinct === 1) && leg.distance_km >= 0.15 && !iconsDone.has(iconKey)) {
+              iconsDone.add(iconKey);
+              const bg = legColor(leg, mode);
+              const e = document.createElement("div");
+              e.setAttribute("role", "img");
+              e.setAttribute("aria-label", `${st.label} leg`);
+              e.innerHTML = iconSvg(mode, 13, inkOn(bg));
+              e.style.cssText = `width:24px;height:24px;border-radius:50%;background:${bg};display:flex;align-items:center;justify-content:center;border:2px solid #fff;box-shadow:0 1px 4px #0004`;
+              markers.current.push(new maplibregl.Marker({ element: e }).setLngLat(along(coords, 0.5)).addTo(m));
+            }
+            return;
+          }
           if (!dim) {
             m.addLayer({
               id: `${id}-casing`,
@@ -148,11 +210,33 @@ export default function RouteMap({
               "line-color": r.color,
               "line-width": dim ? 3 : 5.5,
               "line-opacity": dim ? 0.3 : 1,
-              ...(leg.mode === "walk" ? { "line-dasharray": [0.6, 1.6] } : {}),
+              ...(walk ? { "line-dasharray": [0.6, 1.6] } : {}),
             },
           });
         });
       });
+      // With mode colours the lines no longer say which bot found them, so label each route with its bot(s).
+      if (byMode) {
+        const groups = new Map<string, MapRoute[]>();
+        routes.forEach((r) => groups.set(r.candidate.id, [...(groups.get(r.candidate.id) ?? []), r]));
+        groups.forEach((rs) => {
+          const legs = rs[0].candidate.legs.filter((l) => l.geometry.length > 1);
+          if (!legs.length) return;
+          const longest = legs.reduce((a, b) => (b.distance_km > a.distance_km ? b : a));
+          // 35% along, so the label does not sit on the leg's mode icon at 50%
+          const [lo, la] = along(longest.geometry.map(([a, b]) => [b, a] as [number, number]), 0.35);
+          const focused = rs.some((r) => r.emphasized !== false);
+          const e = document.createElement("div");
+          e.setAttribute("data-testid", `map-label-${rs.map((r) => r.id).join("-")}`);
+          e.style.cssText = `display:flex;gap:4px;align-items:center;padding:3px 8px 3px 6px;border-radius:999px;background:#fff;box-shadow:0 2px 8px #0003;font:600 11px/1.2 var(--font-geist-sans),sans-serif;color:#18181b;white-space:nowrap;opacity:${focused ? 1 : 0.7}`;
+          rs.forEach((r, k) => {
+            const dot = document.createElement("span");
+            dot.style.cssText = `width:9px;height:9px;border-radius:50%;background:${r.color};flex:none`;
+            e.append(dot, document.createTextNode(r.label ?? r.id), ...(k < rs.length - 1 ? [document.createTextNode(" ")] : []));
+          });
+          markers.current.push(new maplibregl.Marker({ element: e, anchor: "bottom", offset: [0, -8] }).setLngLat([lo, la]).addTo(m));
+        });
+      }
       const mk = (ll: [number, number] | null | undefined, color: string, label: string, letter: string) => {
         if (!ll) return;
         const e = document.createElement("div");
@@ -174,7 +258,7 @@ export default function RouteMap({
     };
     if (ready.current) draw();
     else m.once("load", draw);
-  }, [routes, origin, destination]);
+  }, [routes, origin, destination, colorBy]);
 
   return <div ref={el} className="h-full w-full" data-testid="map" role="application" aria-label="Route map of Toronto" />;
 }

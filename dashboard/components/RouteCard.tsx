@@ -1,6 +1,8 @@
 "use client";
 import type { BotKey, BotState } from "@/lib/bots";
 import { STATUS_CHIP } from "@/lib/bots";
+import { MODES, legColor, legMode } from "@/lib/modes";
+import ModeBadge, { ModeLine } from "@/components/ModeBadge";
 
 type Bot = { key: BotKey; name: string; color: string; blurb: string };
 
@@ -57,11 +59,25 @@ export default function RouteCard({
         className="block w-full px-4 pt-3 pb-2 text-left focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-zinc-900 disabled:cursor-default"
       >
         <div className="flex items-start justify-between gap-2">
-          <div className="flex min-w-0 items-center gap-2">
-            <span aria-hidden className="h-3 w-3 shrink-0 rounded-full" style={{ background: bot.color }} />
+          <div className="flex min-w-0 items-start gap-2">
+            <span aria-hidden className="mt-1 h-3 w-3 shrink-0 rounded-full" style={{ background: bot.color }} />
             <div className="min-w-0">
               <h3 className="truncate text-sm font-semibold text-zinc-900">{bot.name}</h3>
               <p className="truncate text-xs text-zinc-500">{r ? r.title : bot.blurb}</p>
+              {r && r.legs.length > 0 && (
+                <p className="mt-1 flex items-center gap-0.5" data-testid={`modes-${bot.key}`}>
+                  <span className="sr-only">Modes: {r.legs.map((l) => MODES[legMode(l, r.id)].label).join(", ")}</span>
+                  {r.legs.map((l, i) => {
+                    const mode = legMode(l, r.id);
+                    return (
+                      <span key={i} className="flex items-center gap-0.5">
+                        {i > 0 && <span aria-hidden className="text-[10px] text-zinc-400">›</span>}
+                        <ModeBadge mode={mode} color={legColor(l, mode)} size={18} />
+                      </span>
+                    );
+                  })}
+                </p>
+              )}
             </div>
           </div>
           <StatusChip botKey={bot.key} state={state} />
@@ -94,17 +110,27 @@ export default function RouteCard({
                 {r.depart} to {r.arrive} · walk {r.walk_m} m
                 {r.meets_deadline !== undefined && (r.meets_deadline ? " · makes your deadline" : ` · misses your deadline (leave by ${r.leave_by})`)}
               </p>
-              <ol className="mt-2 flex flex-col gap-1.5 text-sm" data-testid={chosen ? "itinerary" : `itinerary-${bot.key}`}>
-                {r.legs.map((l, i) => (
-                  <li key={i} className="flex gap-3">
-                    <span className="w-12 shrink-0 text-right text-xs tabular-nums leading-5 text-zinc-500">{Math.round(l.duration_s / 60)} min</span>
-                    <span className="leading-5 text-zinc-800">
-                      {l.label}
-                      {l.cost ? <span className="text-zinc-500"> · ${l.cost.toFixed(2)}</span> : null}
-                      {l.provenance === "estimated" && <span className="ml-1 rounded bg-zinc-100 px-1 text-[10px] text-zinc-600">estimated</span>}
-                    </span>
-                  </li>
-                ))}
+              <ol className="mt-2 flex flex-col text-sm" data-testid={chosen ? "itinerary" : `itinerary-${bot.key}`}>
+                {r.legs.map((l, i) => {
+                  const mode = legMode(l, r.id);
+                  const color = legColor(l, mode);
+                  return (
+                    <li key={i} className="flex gap-2">
+                      <span className="w-14 shrink-0 pt-0.5 text-right text-xs whitespace-nowrap tabular-nums leading-5 text-zinc-500">{Math.round(l.duration_s / 60)} min</span>
+                      {/* timeline: mode icon, then a stretch of line drawn like the map draws this mode */}
+                      <span className="flex w-6 shrink-0 flex-col items-center">
+                        <ModeBadge mode={mode} color={color} />
+                        {i < r.legs.length - 1 && <span className="flex min-h-3 flex-1 justify-center overflow-hidden"><ModeLine mode={mode} color={color} vertical length={40} /></span>}
+                      </span>
+                      <span className="min-w-0 pb-1 leading-5 text-zinc-800">
+                        <span className="block text-[11px] font-semibold text-zinc-500">{MODES[mode].label}</span>
+                        {l.label}
+                        {l.cost ? <span className="text-zinc-500"> · ${l.cost.toFixed(2)}</span> : null}
+                        {l.provenance === "estimated" && <span className="ml-1 rounded bg-zinc-100 px-1 text-[10px] text-zinc-600">estimated</span>}
+                      </span>
+                    </li>
+                  );
+                })}
               </ol>
               {r.notes?.length ? (
                 <ul className="mt-2 flex flex-col gap-0.5 text-xs text-zinc-500">
