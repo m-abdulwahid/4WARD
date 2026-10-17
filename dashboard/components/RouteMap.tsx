@@ -5,7 +5,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import type { Candidate } from "@/lib/api";
 import { MODES, iconSvg, inkOn, legColor, legMode } from "@/lib/modes";
 
-export type MapRoute = { id: string; color: string; candidate: Candidate; emphasized?: boolean; label?: string };
+export type MapRoute = { id: string; color: string; candidate: Candidate; emphasized?: boolean; label?: string; visible?: boolean };
 export type MapPadding = { top: number; right: number; bottom: number; left: number };
 export type BikeStation = { id: string; name: string; lat: number; lon: number; bikes: number; ebikes: number; docks: number };
 
@@ -62,6 +62,91 @@ const OSM_FALLBACK: maplibregl.StyleSpecification = {
   ],
 };
 const NO_PAD: MapPadding = { top: 60, right: 60, bottom: 60, left: 60 };
+
+/** Same itinerary found by several bots: draw it once and name all of them. */
+const sameRoute = (r: MapRoute) => `${r.candidate.id}|${r.candidate.duration_min}|${r.candidate.cost}|${r.candidate.legs.length}`;
+const OFFSET_PX = 5; // routes side by side: neighbours on the same street are this far apart
+
+/**
+ * Home map: every leg in its transport mode's style. All found routes are drawn at once; each distinct route gets a
+ * small sideways offset so routes sharing a street or subway line stay visible next to each other, plus a label
+ * naming the bot(s) that found it. Hidden routes (legend eye toggles) still count for the map fit.
+ */
+function drawByMode(m: maplibregl.Map, routes: MapRoute[], bounds: maplibregl.LngLatBounds, markers: maplibregl.Marker[]) {
+  routes.forEach((r) => r.candidate.legs.forEach((l) => l.geometry.forEach(([la, lo]) => bounds.extend([lo, la]))));
+  const groups: MapRoute[][] = [];
+  routes
+    .filter((r) => r.visible !== false)
+    .forEach((r) => {
+      const g = groups.find((x) => sameRoute(x[0]) === sameRoute(r));
+      if (g) g.push(r);
+      else groups.push([r]);
+    });
+  const n = groups.length;
+  const anyDim = groups.some((rs) => rs.every((r) => r.emphasized === false));
+  // offsets follow the stable group order; drawing order puts dimmed routes underneath
+  const placed = groups.map((rs, gi) => ({ rs, offset: n > 1 ? (gi - (n - 1) / 2) * OFFSET_PX : 0, dim: rs.every((r) => r.emphasized === false) }));
+  [...placed].sort((a, b) => Number(!a.dim) - Number(!b.dim)).forEach(({ rs, offset, dim }, order) => {
+    const key = rs.map((r) => r.id).join("-");
+    rs[0].candidate.legs.forEach((leg, i) => {
+      const coords = leg.geometry.map(([la, lo]) => [lo, la] as [number, number]);
+      if (coords.length < 2) return;
+      const id = `rt-${key}-${i}`;
+      m.addSource(id, { type: "geojson", data: { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: coords } } });
+      const mode = legMode(leg, rs[0].candidate.id);
+      const st = MODES[mode];
+      const w = dim ? Math.max(2.5, st.width * 0.55) : st.width;
+      if (mode !== "walk") {
+        m.addLayer({
+          id: `${id}-casing`,
+          type: "line",
+          source: id,
+          layout: { "line-cap": "round", "line-join": "round" },
+          paint: { "line-color": dim ? "#ffffff" : st.casing, "line-width": w + (dim ? 2.5 : 3.5), "line-opacity": dim ? 0.8 : 0.95, "line-offset": offset },
+        });
+      }
+      m.addLayer({
+        id,
+        type: "line",
+        source: id,
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: {
+          "line-color": legColor(leg, mode),
+          "line-width": w,
+          // dimmed legs stay clearly visible on the colourful basemap: thinner, not washed out
+          "line-opacity": dim ? 0.75 : 1,
+          "line-offset": offset,
+          ...(st.dash ? { "line-dasharray": st.dash } : {}),
+        },
+      });
+      // Mode icons on the selected route (or the only route), skipping legs too short to see.
+      if (!dim && (anyDim || n === 1) && leg.distance_km >= 0.15) {
+        const bg = legColor(leg, mode);
+        const e = document.createElement("div");
+        e.setAttribute("role", "img");
+        e.setAttribute("aria-label", `${st.label} leg`);
+        e.innerHTML = iconSvg(mode, 13, inkOn(bg));
+        e.style.cssText = `width:24px;height:24px;border-radius:50%;background:${bg};display:flex;align-items:center;justify-content:center;border:2px solid #fff;box-shadow:0 1px 4px #0004`;
+        markers.push(new maplibregl.Marker({ element: e }).setLngLat(along(coords, 0.5)).addTo(m));
+      }
+    });
+    // Label: which bot(s) found this route. Staggered along the route so neighbours do not stack.
+    const legs = rs[0].candidate.legs.filter((l) => l.geometry.length > 1);
+    if (!legs.length) return;
+    const longest = legs.reduce((a, b) => (b.distance_km > a.distance_km ? b : a));
+    const f = [0.25, 0.75, 0.4, 0.6, 0.15, 0.85][groups.indexOf(rs) % 6];
+    const [lo, la] = along(longest.geometry.map(([a, b]) => [b, a] as [number, number]), f);
+    const e = document.createElement("div");
+    e.setAttribute("data-testid", `map-label-${key}`);
+    e.style.cssText = `display:flex;gap:4px;align-items:center;padding:3px 8px 3px 6px;border-radius:999px;background:#fff;box-shadow:0 2px 8px #0003;font:600 11px/1.2 var(--font-geist-sans),sans-serif;color:#18181b;white-space:nowrap;opacity:${dim ? 0.75 : 1};z-index:${order}`;
+    rs.forEach((r, k) => {
+      const dot = document.createElement("span");
+      dot.style.cssText = `width:9px;height:9px;border-radius:50%;background:${r.color};flex:none`;
+      e.append(dot, document.createTextNode(r.label ?? r.id), ...(k < rs.length - 1 ? [document.createTextNode(" ")] : []));
+    });
+    markers.push(new maplibregl.Marker({ element: e, anchor: "bottom", offset: [0, -8] }).setLngLat([lo, la]).addTo(m));
+  });
+}
 
 export default function RouteMap({
   routes,
@@ -196,33 +281,25 @@ export default function RouteMap({
       markers.current.forEach((k) => k.remove());
       markers.current = [];
       const bounds = new maplibregl.LngLatBounds();
-      // dimmed routes first so the highlighted one is drawn on top
-      const ordered = [...routes].sort((a, b) => Number(a.emphasized !== false) - Number(b.emphasized !== false));
-      const byMode = colorBy === "mode";
-      const anyDim = routes.some((r) => r.emphasized === false);
-      const distinct = new Set(routes.map((r) => r.candidate.id)).size;
-      const iconsDone = new Set<string>(); // routes sharing a candidate draw identical legs: one set of icons is enough
-      ordered.forEach((r) => {
-        const dim = r.emphasized === false;
-        r.candidate.legs.forEach((leg, i) => {
-          const coords = leg.geometry.map(([la, lo]) => [lo, la] as [number, number]);
-          if (coords.length < 2) return;
-          coords.forEach((c) => bounds.extend(c));
-          const id = `rt-${r.id}-${i}`;
-          m.addSource(id, { type: "geojson", data: { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: coords } } });
-          const mode = legMode(leg, r.candidate.id);
-          const st = MODES[mode];
-          const walk = mode === "walk";
-          if (byMode) {
-            // Mode colours stay visible when dimmed: thinner and lighter, but the same hue and pattern.
-            const w = dim ? Math.max(2.5, st.width * 0.55) : st.width;
-            if (!walk) {
+      if (colorBy === "mode") drawByMode(m, routes, bounds, markers.current);
+      else {
+        // planner: one colour per route; dimmed routes first so the highlighted one is drawn on top
+        const ordered = [...routes].sort((a, b) => Number(a.emphasized !== false) - Number(b.emphasized !== false));
+        ordered.forEach((r) => {
+          const dim = r.emphasized === false;
+          r.candidate.legs.forEach((leg, i) => {
+            const coords = leg.geometry.map(([la, lo]) => [lo, la] as [number, number]);
+            if (coords.length < 2) return;
+            coords.forEach((c) => bounds.extend(c));
+            const id = `rt-${r.id}-${i}`;
+            m.addSource(id, { type: "geojson", data: { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: coords } } });
+            if (!dim) {
               m.addLayer({
                 id: `${id}-casing`,
                 type: "line",
                 source: id,
                 layout: { "line-cap": "round", "line-join": "round" },
-                paint: { "line-color": dim ? "#ffffff" : st.casing, "line-width": w + (dim ? 2.5 : 3.5), "line-opacity": dim ? 0.8 : 0.95 },
+                paint: { "line-color": "#ffffff", "line-width": 9, "line-opacity": 0.9 },
               });
             }
             m.addLayer({
@@ -231,73 +308,13 @@ export default function RouteMap({
               source: id,
               layout: { "line-cap": "round", "line-join": "round" },
               paint: {
-                "line-color": legColor(leg, mode),
-                "line-width": w,
-                // dimmed legs stay clearly visible on the colourful basemap: thinner, not washed out
-                "line-opacity": dim ? 0.75 : 1,
-                ...(st.dash ? { "line-dasharray": st.dash } : {}),
+                "line-color": r.color,
+                "line-width": dim ? 3 : 5.5,
+                "line-opacity": dim ? 0.3 : 1,
+                ...(leg.mode === "walk" ? { "line-dasharray": [0.6, 1.6] } : {}),
               },
             });
-            // Mode icon in the middle of each leg of the route in focus (skip legs too short to see).
-            const iconKey = `${r.candidate.id}-${i}`;
-            if (!dim && (anyDim || distinct === 1) && leg.distance_km >= 0.15 && !iconsDone.has(iconKey)) {
-              iconsDone.add(iconKey);
-              const bg = legColor(leg, mode);
-              const e = document.createElement("div");
-              e.setAttribute("role", "img");
-              e.setAttribute("aria-label", `${st.label} leg`);
-              e.innerHTML = iconSvg(mode, 13, inkOn(bg));
-              e.style.cssText = `width:24px;height:24px;border-radius:50%;background:${bg};display:flex;align-items:center;justify-content:center;border:2px solid #fff;box-shadow:0 1px 4px #0004`;
-              markers.current.push(new maplibregl.Marker({ element: e }).setLngLat(along(coords, 0.5)).addTo(m));
-            }
-            return;
-          }
-          if (!dim) {
-            m.addLayer({
-              id: `${id}-casing`,
-              type: "line",
-              source: id,
-              layout: { "line-cap": "round", "line-join": "round" },
-              paint: { "line-color": "#ffffff", "line-width": 9, "line-opacity": 0.9 },
-            });
-          }
-          m.addLayer({
-            id,
-            type: "line",
-            source: id,
-            layout: { "line-cap": "round", "line-join": "round" },
-            paint: {
-              "line-color": r.color,
-              "line-width": dim ? 3 : 5.5,
-              "line-opacity": dim ? 0.3 : 1,
-              ...(walk ? { "line-dasharray": [0.6, 1.6] } : {}),
-            },
           });
-        });
-      });
-      // With mode colours the lines no longer say which bot found them, so label each route with its bot(s).
-      if (byMode) {
-        const groups = new Map<string, MapRoute[]>();
-        routes.forEach((r) => groups.set(r.candidate.id, [...(groups.get(r.candidate.id) ?? []), r]));
-        let g = 0;
-        groups.forEach((rs) => {
-          const legs = rs[0].candidate.legs.filter((l) => l.geometry.length > 1);
-          if (!legs.length) return;
-          const longest = legs.reduce((a, b) => (b.distance_km > a.distance_km ? b : a));
-          // Stagger labels along their routes (25%, 75%, 40%, ...) so routes sharing a street do not stack labels,
-          // and keep clear of the leg's mode icon at 50%.
-          const f = [0.25, 0.75, 0.4, 0.6, 0.15, 0.85][g++ % 6];
-          const [lo, la] = along(longest.geometry.map(([a, b]) => [b, a] as [number, number]), f);
-          const focused = rs.some((r) => r.emphasized !== false);
-          const e = document.createElement("div");
-          e.setAttribute("data-testid", `map-label-${rs.map((r) => r.id).join("-")}`);
-          e.style.cssText = `display:flex;gap:4px;align-items:center;padding:3px 8px 3px 6px;border-radius:999px;background:#fff;box-shadow:0 2px 8px #0003;font:600 11px/1.2 var(--font-geist-sans),sans-serif;color:#18181b;white-space:nowrap;opacity:${focused ? 1 : 0.7}`;
-          rs.forEach((r, k) => {
-            const dot = document.createElement("span");
-            dot.style.cssText = `width:9px;height:9px;border-radius:50%;background:${r.color};flex:none`;
-            e.append(dot, document.createTextNode(r.label ?? r.id), ...(k < rs.length - 1 ? [document.createTextNode(" ")] : []));
-          });
-          markers.current.push(new maplibregl.Marker({ element: e, anchor: "bottom", offset: [0, -8] }).setLngLat([lo, la]).addTo(m));
         });
       }
       const mk = (ll: [number, number] | null | undefined, color: string, label: string, letter: string) => {

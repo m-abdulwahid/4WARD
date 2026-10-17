@@ -16,7 +16,23 @@ function Pin({ letter }: { letter: string }) {
  * What the map shows. Lines are coloured by transport mode; small labels on the map say which bot found each route.
  * Open on laptops, collapsed behind a button on phones.
  */
-export default function MapLegend({ found, highlight, modes }: { found: Record<BotKey, boolean>; highlight: BotKey | null; modes: Partial<Record<ModeKey, string>> }) {
+export type LegendBotStatus = { state: "waiting" | "searching" | "done" | "failed"; error?: string | null };
+
+export default function MapLegend({
+  status,
+  hiddenBots,
+  onToggleBot,
+  onShowAll,
+  highlight,
+  modes,
+}: {
+  status: Record<BotKey, LegendBotStatus>;
+  hiddenBots: Partial<Record<BotKey, boolean>>;
+  onToggleBot: (k: BotKey) => void;
+  onShowAll: () => void;
+  highlight: BotKey | null;
+  modes: Partial<Record<ModeKey, string>>;
+}) {
   const [open, setOpen] = useState(false);
   useEffect(() => setOpen(window.matchMedia("(min-width: 768px)").matches), []);
   // Once there are routes, list only the modes they use; before that, list every mode.
@@ -40,6 +56,58 @@ export default function MapLegend({ found, highlight, modes }: { found: Record<B
       </button>
       <div id="legend-body" hidden={!open} className="mt-1 max-h-[55dvh] w-52 space-y-2 overflow-y-auto px-1 pb-1 text-xs text-zinc-700">
         <div>
+          <h3 className="mb-1 text-[10px] font-semibold tracking-wide text-zinc-500 uppercase">Routes on the map</h3>
+          <ul className="space-y-1">
+            {BOTS.map((b) => {
+              const st = status[b.key];
+              const shown = !hiddenBots[b.key];
+              return (
+                <li key={b.key} className="flex items-center gap-2" data-testid={`legend-bot-${b.key}`}>
+                  <button
+                    type="button"
+                    data-testid={`legend-eye-${b.key}`}
+                    aria-pressed={shown}
+                    aria-label={`${shown ? "Hide" : "Show"} the ${b.name} route on the map`}
+                    title={`${shown ? "Hide" : "Show"} on the map`}
+                    onClick={() => onToggleBot(b.key)}
+                    className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md ring-1 focus-visible:outline-2 focus-visible:outline-zinc-900 ${shown ? "bg-white text-zinc-700 ring-zinc-200 hover:bg-zinc-50" : "bg-zinc-100 text-zinc-400 ring-zinc-200"}`}
+                  >
+                    <svg aria-hidden viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                      {shown ? (
+                        <>
+                          <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" />
+                          <circle cx="12" cy="12" r="3" />
+                        </>
+                      ) : (
+                        <>
+                          <path d="M10.7 5.1A10 10 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-2.2 3.2M6.6 6.6C3.9 8.4 2 12 2 12s3.5 7 10 7a9.7 9.7 0 0 0 5.4-1.6" />
+                          <path d="M2 2l20 20" />
+                        </>
+                      )}
+                    </svg>
+                  </button>
+                  <span aria-hidden className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: b.color, opacity: st.state === "done" && shown ? 1 : 0.4 }} />
+                  <span className={`min-w-0 truncate ${highlight === b.key ? "font-semibold text-zinc-900" : st.state === "done" && shown ? "" : "text-zinc-400"}`}>{b.name}</span>
+                  <span className={`ml-auto shrink-0 text-[10px] ${st.state === "failed" ? "text-red-700" : "text-zinc-500"}`} title={st.state === "failed" ? st.error ?? undefined : undefined}>
+                    {highlight === b.key ? "selected" : !shown && st.state === "done" ? "hidden" : { waiting: "", searching: "searching…", done: "", failed: "failed, no route" }[st.state]}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+          {highlight && (
+            <button
+              type="button"
+              data-testid="legend-show-all"
+              onClick={onShowAll}
+              className="mt-1.5 w-full rounded-lg bg-zinc-900 px-2 py-1 text-[11px] font-semibold text-white hover:bg-zinc-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-900"
+            >
+              Show all routes
+            </button>
+          )}
+          <p className="mt-1 text-[10px] leading-snug text-zinc-500">Labels on the map name the bot behind each route. Routes on the same street sit side by side.</p>
+        </div>
+        <div className="border-t border-zinc-100 pt-2">
           <h3 className="mb-1 text-[10px] font-semibold tracking-wide text-zinc-500 uppercase">{used ? "Modes on these routes" : "Modes"}</h3>
           <ul className="space-y-1">
             {shown.map((m) => (
@@ -51,20 +119,6 @@ export default function MapLegend({ found, highlight, modes }: { found: Record<B
             ))}
           </ul>
           {(shown.includes("subway") || shown.includes("streetcar")) && <p className="mt-1 text-[10px] leading-snug text-zinc-500">Subway and streetcar legs use the TTC line colour, so they can differ from route to route.</p>}
-        </div>
-        <div className="border-t border-zinc-100 pt-2">
-          <h3 className="mb-1 text-[10px] font-semibold tracking-wide text-zinc-500 uppercase">Which bot found it</h3>
-          <ul className="space-y-1">
-            {BOTS.map((b) => (
-              <li key={b.key} className={`flex items-center gap-2 ${found[b.key] ? "" : "text-zinc-400"}`}>
-                <span aria-hidden className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: b.color, opacity: found[b.key] ? 1 : 0.4 }} />
-                <span className={highlight === b.key ? "font-semibold text-zinc-900" : ""}>{b.name}</span>
-                {!found[b.key] && <span className="ml-auto text-[10px]">no route yet</span>}
-                {highlight === b.key && <span className="ml-auto text-[10px] text-zinc-500">selected</span>}
-              </li>
-            ))}
-          </ul>
-          <p className="mt-1 text-[10px] leading-snug text-zinc-500">Labels on the map name the bot behind each route. Routes not selected are thinner and lighter.</p>
         </div>
         <p className="flex items-center gap-2 border-t border-zinc-100 pt-2 text-[11px] text-zinc-600">
           <span className="flex gap-0.5">

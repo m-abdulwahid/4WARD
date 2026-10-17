@@ -7,7 +7,7 @@ import InsightsPanel from "@/components/InsightsPanel";
 import RouteCard from "@/components/RouteCard";
 import BotDrawer from "@/components/BotDrawer";
 import LayerToggles from "@/components/LayerToggles";
-import MapLegend from "@/components/MapLegend";
+import MapLegend, { LegendBotStatus } from "@/components/MapLegend";
 import TripOptions, { Priority } from "@/components/TripOptions";
 import ExampleTrips from "@/components/ExampleTrips";
 import { TimeKind, parseTime, writeTimeToPrompt } from "@/lib/timeParse";
@@ -85,6 +85,16 @@ function Icon({ d }: { d: string }) {
 export default function Home() {
   const [tab, setTab] = useState<Tab>("map");
   const [sheetFull, setSheetFull] = useState(false);
+  // Panel hidden = full map (wide screens) or a small peek bar (phones). Remembered for this browser session.
+  const [panelHidden, setPanelHidden] = useState(false);
+  const panelHiddenRef = useRef(false);
+  panelHiddenRef.current = panelHidden;
+  const [unseen, setUnseen] = useState(0); // routes that arrived while the panel was hidden
+  const [hiddenBots, setHiddenBots] = useState<Partial<Record<BotKey, boolean>>>({});
+  const [showAll, setShowAll] = useState(false); // "Show all routes": ignore the chosen route's highlight
+  const showPanelBtn = useRef<HTMLButtonElement>(null);
+  const dragY = useRef<number | null>(null);
+  const dragged = useRef(false);
   const [drawer, setDrawer] = useState(false);
   const [prompt, setPrompt] = useState("");
   // typed time fields (they win over any time in the trip text)
@@ -162,6 +172,30 @@ export default function Home() {
       .catch(() => {}); // backend errors surface through the run itself
   };
 
+  useEffect(() => {
+    try {
+      if (sessionStorage.getItem("4ward.panelHidden") === "1") setPanelHidden(true);
+    } catch {}
+  }, []);
+  const setHidden = useCallback((h: boolean) => {
+    setPanelHidden(h);
+    if (!h) setUnseen(0);
+    try {
+      sessionStorage.setItem("4ward.panelHidden", h ? "1" : "0");
+    } catch {}
+    // keep keyboard focus somewhere visible
+    if (h) setTimeout(() => showPanelBtn.current?.focus(), 0);
+  }, []);
+  // Esc hides the panel and shows it again (the bots drawer handles its own Esc first)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented || drawer) return;
+      setHidden(!panelHiddenRef.current);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [drawer, setHidden]);
+
   const patch = useCallback((k: BotKey, p: Partial<BotState>) => setBots((b) => ({ ...b, [k]: { ...b[k], ...p } })), []);
 
   const start = useCallback(async (text: string = prompt) => {
@@ -171,6 +205,8 @@ export default function Home() {
     setFocus(null);
     setParsed(null);
     setPlaces(null);
+    setUnseen(0);
+    setShowAll(false);
     setBots(blankBots());
     setBudget(readBudget(text));
     // The backend compares deadlines with today's clock: a deadline tomorrow (without leaving tomorrow) cannot be checked.
@@ -198,7 +234,10 @@ export default function Home() {
         else if (ev.type === "frame") patch(k, { frame: ev.data });
         else if (ev.type === "status") patch(k, { status: ev.status });
         else if (ev.type === "step") setBots((b) => ({ ...b, [k]: { ...b[k], steps: ev.n, lastReason: ev.reason ?? b[k].lastReason } }));
-        else if (ev.type === "result") patch(k, { status: ev.status, route: ev.route, brain: ev.brain, elapsed: ev.elapsed_s, error: ev.error });
+        else if (ev.type === "result") {
+          patch(k, { status: ev.status, route: ev.route, brain: ev.brain, elapsed: ev.elapsed_s, error: ev.error });
+          if (panelHiddenRef.current) setUnseen((u) => u + 1);
+        }
         else if (ev.type === "run_done") {
           setRunning(false);
           if (ev.result?.error) {
@@ -221,7 +260,7 @@ export default function Home() {
   }, [prompt, patch]);
 
   const done = BOTS.filter((b) => bots[b.key].route);
-  const highlight = focus ?? chosen;
+  const highlight = focus ?? (showAll ? null : chosen);
 
   // When the run finishes, open the route that best matches the user's priority (engine numbers only).
   useEffect(() => {
@@ -246,8 +285,9 @@ export default function Home() {
         label: b.name,
         candidate: bots[b.key].route as Candidate,
         emphasized: highlight ? highlight === b.key : true,
+        visible: !hiddenBots[b.key],
       })),
-    [bots, highlight],
+    [bots, highlight, hiddenBots],
   );
   // Modes the finished routes use, with the colour each is drawn in (TTC line colour for transit).
   const usedModes = useMemo(() => {
@@ -266,8 +306,24 @@ export default function Home() {
 
   // keep routes inside the part of the map that is not covered by the panel / sheet
   const mapPadding: MapPadding = wide
-    ? { top: 60, right: 270, bottom: 60, left: RAIL_W + PANEL_W[tab] + 40 } // right: Layers + Legend column (224px + gaps)
-    : { top: 110, right: 30, bottom: typeof window === "undefined" ? 400 : Math.round(window.innerHeight * (sheetFull ? 0.8 : 0.46)) + 110, left: 30 };
+    ? { top: 60, right: 270, bottom: 60, left: RAIL_W + (panelHidden ? 0 : PANEL_W[tab]) + 40 } // right: Layers + Legend column
+    : {
+        top: 110,
+        right: 30,
+        bottom: panelHidden ? 150 : typeof window === "undefined" ? 400 : Math.round(window.innerHeight * (sheetFull ? 0.8 : 0.46)) + 110,
+        left: 30,
+      };
+  const showAllRoutes = () => {
+    setFocus(null);
+    setShowAll(true);
+  };
+  const legendStatus = Object.fromEntries(
+    BOTS.map((b) => {
+      const s = bots[b.key];
+      const state = s.route ? "done" : s.status === "FAILED" ? "failed" : running || s.status === "SCANNING" || s.status === "ROUTING" ? "searching" : "waiting";
+      return [b.key, { state, error: s.error }];
+    }),
+  ) as Record<BotKey, LegendBotStatus>;
 
   const onTabKey = (e: React.KeyboardEvent, i: number) => {
     const dir = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 }[e.key];
@@ -297,8 +353,54 @@ export default function Home() {
 
       <div className="absolute top-3 right-3 z-10 flex flex-col items-end gap-2 md:top-4 md:right-4 md:items-stretch">
         <LayerToggles onTtc={setShowTtc} onBikes={setBikeStations} />
-        <MapLegend found={{ cheap: !!bots.cheap.route, fastest: !!bots.fastest.route, green: !!bots.green.route, best: !!bots.best.route }} highlight={highlight} modes={usedModes} />
+        <MapLegend
+          status={legendStatus}
+          hiddenBots={hiddenBots}
+          onToggleBot={(k) => setHiddenBots((h) => ({ ...h, [k]: !h[k] }))}
+          onShowAll={showAllRoutes}
+          highlight={highlight}
+          modes={usedModes}
+        />
       </div>
+
+      {highlight && done.length > 1 && (
+        <button
+          type="button"
+          data-testid="show-all-routes"
+          onClick={showAllRoutes}
+          className="absolute top-3 left-1/2 z-10 -translate-x-1/2 rounded-full bg-white px-4 py-2 text-xs font-semibold text-zinc-900 shadow-lg ring-1 ring-black/5 hover:bg-zinc-50 focus-visible:outline-2 focus-visible:outline-zinc-900 md:top-4"
+        >
+          Show all {done.length} routes
+        </button>
+      )}
+
+      {/* Wide screens: tab on the panel's edge that stays visible when the panel is hidden */}
+      <button
+        ref={showPanelBtn}
+        type="button"
+        data-testid="panel-toggle"
+        aria-expanded={!panelHidden}
+        aria-controls="main-panel"
+        aria-keyshortcuts="Escape"
+        onClick={() => setHidden(!panelHidden)}
+        style={{ left: panelHidden ? RAIL_W - 8 : RAIL_W + PANEL_W[tab] + 8 }}
+        className="absolute top-4 z-20 hidden items-center gap-1 rounded-full bg-white py-2 pr-3 pl-2 text-xs font-semibold text-zinc-800 shadow-lg ring-1 ring-black/5 transition-[left] duration-200 hover:bg-zinc-50 focus-visible:outline-2 focus-visible:outline-zinc-900 motion-reduce:transition-none md:flex"
+      >
+        <svg aria-hidden viewBox="0 0 24 24" className={`h-4 w-4 transition-transform duration-200 ${panelHidden ? "rotate-180" : ""}`} fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round">
+          <path d="M15 6l-6 6 6 6" />
+        </svg>
+        {panelHidden ? "Show panel" : "Hide panel"}
+        {panelHidden && unseen > 0 && (
+          <span data-testid="panel-unseen" className="ml-1 rounded-full bg-sky-600 px-1.5 py-0.5 text-[10px] leading-none text-white">
+            {unseen} new
+          </span>
+        )}
+      </button>
+      {panelHidden && unseen > 0 && (
+        <p role="status" data-testid="routes-ready-notice" className="absolute bottom-20 left-1/2 z-10 -translate-x-1/2 rounded-full bg-zinc-900/90 px-3 py-1.5 text-xs font-medium text-white shadow-lg md:bottom-6">
+          {done.length} of 4 routes ready. Open the panel to compare them.
+        </p>
+      )}
 
       {/* One nav element: bottom tab bar on phones, slim left rail on wide screens */}
       <nav
@@ -339,22 +441,64 @@ export default function Home() {
 
       {/* Bottom sheet on phones, floating panel on wide screens */}
       <section
+        id="main-panel"
         aria-label={panelTitle}
-        className="absolute inset-x-0 bottom-16 z-10 flex h-[var(--sheet-h)] flex-col rounded-t-3xl bg-white shadow-[0_-8px_30px_rgba(0,0,0,0.08)] md:inset-x-auto md:top-4 md:bottom-auto md:left-[104px] md:h-auto md:max-h-[calc(100%-2rem)] md:w-[var(--panel-w)] md:rounded-2xl md:shadow-lg md:ring-1 md:ring-black/5"
-        style={{ "--sheet-h": sheetFull ? "calc(100dvh - 7rem)" : "46dvh", "--panel-w": `${PANEL_W[tab]}px` } as React.CSSProperties}
+        data-hidden={panelHidden || undefined}
+        inert={wide && panelHidden}
+        className={`absolute inset-x-0 bottom-16 z-10 flex h-[var(--sheet-h)] flex-col overflow-hidden rounded-t-3xl bg-white shadow-[0_-8px_30px_rgba(0,0,0,0.08)] transition-[height,transform,opacity] duration-200 motion-reduce:transition-none md:inset-x-auto md:top-4 md:bottom-auto md:left-[104px] md:h-auto md:max-h-[calc(100%-2rem)] md:w-[var(--panel-w)] md:rounded-2xl md:shadow-lg md:ring-1 md:ring-black/5 ${panelHidden ? "md:pointer-events-none md:-translate-x-[calc(100%+8rem)] md:opacity-0" : ""}`}
+        style={{ "--sheet-h": panelHidden ? "3.75rem" : sheetFull ? "calc(100dvh - 7rem)" : "46dvh", "--panel-w": `${PANEL_W[tab]}px` } as React.CSSProperties}
       >
+        {/* Phones: tap the handle to step peek -> half -> full, or drag it up and down. */}
         <button
           type="button"
           data-testid="sheet-handle"
-          onClick={() => setSheetFull((v) => !v)}
-          aria-label={sheetFull ? "Shrink panel" : "Expand panel"}
-          aria-expanded={sheetFull}
-          className="flex shrink-0 justify-center pt-2 pb-1 md:hidden"
+          onClick={() => {
+            if (dragged.current) return void (dragged.current = false);
+            if (panelHidden) setHidden(false);
+            else setSheetFull((v) => !v);
+          }}
+          onPointerDown={(e) => {
+            dragY.current = e.clientY;
+            dragged.current = false;
+            e.currentTarget.setPointerCapture(e.pointerId); // keep getting the release even when the finger leaves the handle
+          }}
+          onPointerCancel={() => (dragY.current = null)}
+          onPointerUp={(e) => {
+            if (dragY.current === null) return;
+            const dy = e.clientY - dragY.current;
+            dragY.current = null;
+            if (Math.abs(dy) < 40) return;
+            dragged.current = true;
+            if (dy > 0) {
+              if (sheetFull) setSheetFull(false);
+              else setHidden(true);
+            } else if (panelHidden) setHidden(false);
+            else setSheetFull(true);
+          }}
+          aria-label={panelHidden ? "Show the panel" : sheetFull ? "Shrink the panel" : "Expand the panel"}
+          aria-expanded={!panelHidden}
+          className="flex shrink-0 touch-none justify-center pt-2 pb-1 md:hidden"
         >
           <span aria-hidden className="h-1.5 w-10 rounded-full bg-zinc-300" />
         </button>
         <header className="shrink-0 px-4 pt-1 pb-2 md:px-5 md:pt-4">
-          <h1 className="text-lg font-semibold tracking-tight">{panelTitle}</h1>
+          <div className="flex items-center justify-between gap-2">
+            <h1 className="text-lg font-semibold tracking-tight">
+              {panelTitle}
+              {panelHidden && unseen > 0 && (
+                <span className="ml-2 rounded-full bg-sky-600 px-1.5 py-0.5 align-middle text-[10px] font-semibold text-white md:hidden">{unseen} new</span>
+              )}
+            </h1>
+            <button
+              type="button"
+              data-testid="sheet-hide"
+              onClick={() => setHidden(!panelHidden)}
+              aria-label={panelHidden ? "Show the panel" : "Hide the panel to see the whole map"}
+              className="rounded-full px-2.5 py-1 text-xs font-medium text-zinc-600 ring-1 ring-zinc-200 hover:bg-zinc-50 focus-visible:outline-2 focus-visible:outline-zinc-900 md:hidden"
+            >
+              {panelHidden ? "Show" : "Hide"}
+            </button>
+          </div>
           {/* Honest status: where data comes from right now. */}
           <ul aria-label="Data status" data-testid="data-status" className="mt-1.5 flex flex-wrap gap-1.5 text-[11px] font-medium">
             {health === undefined ? null : health === null ? (
@@ -376,6 +520,7 @@ export default function Home() {
         </header>
 
         {/* MAP tab */}
+        <div inert={!wide && panelHidden} className="contents">
         <div id="panel-map" role="tabpanel" aria-labelledby="tab-map" hidden={tab !== "map"} className="flex min-h-0 flex-1 flex-col">
           <form
             className="flex min-h-0 flex-1 flex-col"
@@ -549,10 +694,14 @@ export default function Home() {
                 deadlineNote={deadlineNote}
                 focused={focus === b.key}
                 chosen={chosen === b.key}
-                onFocus={() => setFocus((f) => (f === b.key ? null : b.key))}
+                onFocus={() => {
+                  setShowAll(focus === b.key); // clicking the open card again goes back to all routes
+                  setFocus((f) => (f === b.key ? null : b.key));
+                }}
                 onChoose={() => {
                   setChosen(b.key);
                   setFocus(b.key);
+                  setShowAll(false);
                 }}
               />
             ))}
@@ -576,6 +725,7 @@ export default function Home() {
         {/* INSIGHTS tab */}
         <div id="panel-insights" role="tabpanel" aria-labelledby="tab-insights" hidden={tab !== "insights"} className="min-h-0 flex-1 overflow-y-auto px-4 pb-4 md:px-5">
           {insightsSeen && <InsightsPanel />}
+        </div>
         </div>
       </section>
 
