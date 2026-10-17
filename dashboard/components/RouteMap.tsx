@@ -219,12 +219,15 @@ export default function RouteMap({
       if (byMode) {
         const groups = new Map<string, MapRoute[]>();
         routes.forEach((r) => groups.set(r.candidate.id, [...(groups.get(r.candidate.id) ?? []), r]));
+        let g = 0;
         groups.forEach((rs) => {
           const legs = rs[0].candidate.legs.filter((l) => l.geometry.length > 1);
           if (!legs.length) return;
           const longest = legs.reduce((a, b) => (b.distance_km > a.distance_km ? b : a));
-          // 35% along, so the label does not sit on the leg's mode icon at 50%
-          const [lo, la] = along(longest.geometry.map(([a, b]) => [b, a] as [number, number]), 0.35);
+          // Stagger labels along their routes (25%, 75%, 40%, ...) so routes sharing a street do not stack labels,
+          // and keep clear of the leg's mode icon at 50%.
+          const f = [0.25, 0.75, 0.4, 0.6, 0.15, 0.85][g++ % 6];
+          const [lo, la] = along(longest.geometry.map(([a, b]) => [b, a] as [number, number]), f);
           const focused = rs.some((r) => r.emphasized !== false);
           const e = document.createElement("div");
           e.setAttribute("data-testid", `map-label-${rs.map((r) => r.id).join("-")}`);

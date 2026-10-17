@@ -8,6 +8,7 @@ import RouteCard from "@/components/RouteCard";
 import BotDrawer from "@/components/BotDrawer";
 import LayerToggles from "@/components/LayerToggles";
 import MapLegend from "@/components/MapLegend";
+import TripOptions, { Priority } from "@/components/TripOptions";
 import { ModeKey, legColor, legMode } from "@/lib/modes";
 import { DbStatus, TONE, dbLabel } from "@/lib/dataSource";
 import type { BikeStation, MapPadding } from "@/components/RouteMap";
@@ -85,6 +86,7 @@ export default function Home() {
   const [showTtc, setShowTtc] = useState(false);
   const [bikeStations, setBikeStations] = useState<BikeStation[] | null>(null);
   const [insightsSeen, setInsightsSeen] = useState(false);
+  const [priority, setPriority] = useState<Priority>(null);
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const t0 = useRef(0);
@@ -150,6 +152,22 @@ export default function Home() {
 
   const done = BOTS.filter((b) => bots[b.key].route);
   const highlight = focus ?? chosen;
+
+  // When the run finishes, open the route that best matches the user's priority (engine numbers only).
+  useEffect(() => {
+    if (running || !priority || focus || chosen) return;
+    const ready = BOTS.filter((b) => bots[b.key].route);
+    if (!ready.length) return;
+    const by = (f: (r: Candidate) => number) => ready.reduce((a, b) => (f(bots[b.key].route!) < f(bots[a.key].route!) ? b : a)).key;
+    const pick: BotKey =
+      priority === "cheapest" ? by((r) => r.cost ?? Infinity)
+      : priority === "fastest" ? by((r) => r.duration_min ?? Infinity)
+      : priority === "greenest" ? by((r) => r.co2_kg ?? Infinity)
+      : priority === "fewest_transfers" ? by((r) => r.transfers ?? Infinity)
+      : by((r) => r.walk_m ?? Infinity);
+    setFocus(pick);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [running]);
   const mapRoutes = useMemo(
     () =>
       BOTS.filter((b) => bots[b.key].route).map((b) => ({
@@ -307,7 +325,7 @@ export default function Home() {
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
                 rows={4}
-                className="w-full resize-none rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-sm leading-relaxed focus:border-zinc-400 focus:bg-white focus:outline-none"
+                className="w-full shrink-0 resize-none rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-sm leading-relaxed focus:border-zinc-400 focus:bg-white focus:outline-none"
               />
               <div role="group" aria-label="Quick add" className="flex flex-wrap gap-2">
                 {QUICK.map((q) => {
@@ -345,6 +363,7 @@ export default function Home() {
                   </button>
                 ))}
               </div>
+              <TripOptions prompt={prompt} setPrompt={setPrompt} focusPrompt={() => promptRef.current?.focus()} priority={priority} setPriority={setPriority} />
               {error && (
                 <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-800">
                   {error}
