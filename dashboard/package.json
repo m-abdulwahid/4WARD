@@ -3,7 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "ttc-lines": "node scripts/build-ttc-geojson.mjs",
+    "predev": "node scripts/build-ttc-geojson.mjs",
     "dev": "next dev",
+    "prebuild": "node scripts/build-ttc-geojson.mjs",
     "build": "next build",
     "start": "next start"
   },

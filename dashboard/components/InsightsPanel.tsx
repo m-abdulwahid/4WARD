@@ -42,7 +42,7 @@ function Chart({ series, fmt, unit }: { series: { name: string; color: string; p
     });
   return (
     <div className="overflow-x-auto">
-      <svg viewBox={`0 0 ${W} ${H}`} className="w-full min-w-[420px]" role="img" aria-label={`${unit} by hour`}
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full min-w-[300px]" role="img" aria-label={`${unit} by hour`}
         onMouseLeave={() => setHover(null)}
         onMouseMove={(e) => {
           const r = e.currentTarget.getBoundingClientRect();
@@ -118,8 +118,8 @@ export default function InsightsPanel() {
 
   const routes = Array.from(new Set((ttc?.rows ?? []).map((r) => r.route_id))).slice(0, 4);
   return (
-    <section aria-label="Toronto transit and Bike Share history" className="mt-3 grid gap-3 lg:grid-cols-2" data-testid="insights">
-      <div className="rounded-lg bg-white p-3 shadow-sm">
+    <section aria-label="Toronto transit and Bike Share history" className="grid gap-3" data-testid="insights">
+      <div className="rounded-2xl p-4 ring-1 ring-zinc-200">
         <h2 className="text-sm font-bold">Bike Share bikes available, last 24 h</h2>
         {err ? <p className="text-sm text-red-700">History unavailable (backend offline).</p> : !bikes ? <p className="text-sm text-zinc-500">Loading…</p> : (
           <>
@@ -128,7 +128,7 @@ export default function InsightsPanel() {
           </>
         )}
       </div>
-      <div className="rounded-lg bg-white p-3 shadow-sm">
+      <div className="rounded-2xl p-4 ring-1 ring-zinc-200">
         <h2 className="text-sm font-bold">TTC average delay by route (seconds), last 24 h</h2>
         {err ? <p className="text-sm text-red-700">History unavailable (backend offline).</p> : !ttc ? <p className="text-sm text-zinc-500">Loading…</p> : (
           <>
