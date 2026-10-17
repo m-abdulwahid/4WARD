@@ -6,6 +6,7 @@ import { BOTS, BotKey, BotState, blankBots } from "@/lib/bots";
 import InsightsPanel from "@/components/InsightsPanel";
 import RouteCard from "@/components/RouteCard";
 import BotDrawer from "@/components/BotDrawer";
+import RouteSummary from "@/components/RouteSummary";
 import LayerToggles from "@/components/LayerToggles";
 import MapLegend, { LegendBotStatus } from "@/components/MapLegend";
 import TripOptions, { Priority } from "@/components/TripOptions";
@@ -54,13 +55,14 @@ function readBudget(text: string): number | null {
 
 const TABS = [
   { key: "map", label: "Map", icon: "M9 4 3 6v14l6-2 6 2 6-2V4l-6 2-6-2Zm0 0v14m6-12v14" },
+  { key: "plan", label: "Plan", icon: "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14Zm5-2 4 4M8 11h6m-3-3v6" },
   { key: "routes", label: "Routes", icon: "M6 19a2 2 0 1 0 0-4 2 2 0 0 0 0 4Zm12-10a2 2 0 1 0 0-4 2 2 0 0 0 0 4ZM6 15V9a4 4 0 0 1 4-4h4m4 4v6a4 4 0 0 1-4 4h-4" },
   { key: "insights", label: "Insights", icon: "M4 20V10m6 10V4m6 16v-7m4 7H2" },
 ] as const;
 type Tab = (typeof TABS)[number]["key"];
 
 const RAIL_W = 104; // left rail (72px) + gaps
-const PANEL_W: Record<Tab, number> = { map: 400, routes: 400, insights: 600 };
+const PANEL_W: Record<Tab, number> = { map: 0, plan: 400, routes: 400, insights: 600 }; // the Map tab has no panel
 
 function useWide() {
   const [wide, setWide] = useState(true);
@@ -83,7 +85,11 @@ function Icon({ d }: { d: string }) {
 }
 
 export default function Home() {
-  const [tab, setTab] = useState<Tab>("map");
+  const [tab, setTab] = useState<Tab>("plan");
+  const tabRef = useRef<Tab>("plan");
+  tabRef.current = tab;
+  // Clean route view: only the chosen route on the map, with a small summary strip instead of the panel.
+  const [routeView, setRouteView] = useState<BotKey | null>(null);
   const [sheetFull, setSheetFull] = useState(false);
   // Panel hidden = full map (wide screens) or a small peek bar (phones). Remembered for this browser session.
   const [panelHidden, setPanelHidden] = useState(false);
@@ -93,6 +99,8 @@ export default function Home() {
   const [hiddenBots, setHiddenBots] = useState<Partial<Record<BotKey, boolean>>>({});
   const [showAll, setShowAll] = useState(false); // "Show all routes": ignore the chosen route's highlight
   const showPanelBtn = useRef<HTMLButtonElement>(null);
+  const routeViewRef = useRef<BotKey | null>(null);
+  const backToAllRoutesRef = useRef<(unchoose: boolean) => void>(() => {});
   const dragY = useRef<number | null>(null);
   const dragged = useRef(false);
   const [drawer, setDrawer] = useState(false);
@@ -158,7 +166,8 @@ export default function Home() {
   };
 
   const backToPrompt = () => {
-    setTab("map");
+    setTab("plan");
+    setRouteView(null);
     setTimeout(() => promptRef.current?.focus(), 50);
   };
 
@@ -190,6 +199,8 @@ export default function Home() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || e.defaultPrevented || drawer) return;
+      if (routeViewRef.current) return backToAllRoutesRef.current(false);
+      if (tabRef.current === "map") return;
       setHidden(!panelHiddenRef.current);
     };
     window.addEventListener("keydown", onKey);
@@ -207,6 +218,7 @@ export default function Home() {
     setPlaces(null);
     setUnseen(0);
     setShowAll(false);
+    setRouteView(null);
     setBots(blankBots());
     setBudget(readBudget(text));
     // The backend compares deadlines with today's clock: a deadline tomorrow (without leaving tomorrow) cannot be checked.
@@ -236,7 +248,7 @@ export default function Home() {
         else if (ev.type === "step") setBots((b) => ({ ...b, [k]: { ...b[k], steps: ev.n, lastReason: ev.reason ?? b[k].lastReason } }));
         else if (ev.type === "result") {
           patch(k, { status: ev.status, route: ev.route, brain: ev.brain, elapsed: ev.elapsed_s, error: ev.error });
-          if (panelHiddenRef.current) setUnseen((u) => u + 1);
+          if (panelHiddenRef.current || tabRef.current === "map") setUnseen((u) => u + 1);
         }
         else if (ev.type === "run_done") {
           setRunning(false);
@@ -277,22 +289,24 @@ export default function Home() {
     setFocus(pick);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [running]);
+  routeViewRef.current = routeView;
   const mapRoutes = useMemo(
     () =>
-      BOTS.filter((b) => bots[b.key].route).map((b) => ({
+      BOTS.filter((b) => bots[b.key].route && (!routeView || b.key === routeView)).map((b) => ({
         id: b.key,
         color: b.color,
         label: b.name,
         candidate: bots[b.key].route as Candidate,
-        emphasized: highlight ? highlight === b.key : true,
-        visible: !hiddenBots[b.key],
+        emphasized: routeView ? true : highlight ? highlight === b.key : true,
+        visible: routeView ? true : !hiddenBots[b.key],
       })),
-    [bots, highlight, hiddenBots],
+    [bots, highlight, hiddenBots, routeView],
   );
   // Modes the finished routes use, with the colour each is drawn in (TTC line colour for transit).
   const usedModes = useMemo(() => {
     const out: Partial<Record<ModeKey, string>> = {};
-    done.forEach((b) => {
+    // only what is on the map: the chosen route in the clean route view, otherwise every finished route
+    done.filter((b) => !routeView || b.key === routeView).forEach((b) => {
       const c = bots[b.key].route as Candidate;
       c.legs.forEach((l) => {
         const m = legMode(l, c.id);
@@ -301,18 +315,24 @@ export default function Home() {
     });
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bots]);
+  }, [bots, routeView]);
   const first = done[0] ? bots[done[0].key].route : null;
 
   // keep routes inside the part of the map that is not covered by the panel / sheet
-  const mapPadding: MapPadding = wide
-    ? { top: 60, right: 270, bottom: 60, left: RAIL_W + (panelHidden ? 0 : PANEL_W[tab]) + 40 } // right: Layers + Legend column
-    : {
-        top: 110,
-        right: 30,
-        bottom: panelHidden ? 150 : typeof window === "undefined" ? 400 : Math.round(window.innerHeight * (sheetFull ? 0.8 : 0.46)) + 110,
-        left: 30,
-      };
+  const noPanel = tab === "map" || !!routeView;
+  const panelShown = !noPanel && !panelHidden;
+  const mapPadding: MapPadding = routeView
+    ? wide
+      ? { top: 70, right: 270, bottom: 300, left: RAIL_W + 40 } // summary strip along the bottom
+      : { top: 110, right: 30, bottom: 360, left: 30 }
+    : wide
+      ? { top: 60, right: 270, bottom: 60, left: RAIL_W + (panelShown ? PANEL_W[tab] : 0) + 40 } // right: Layers + Legend column
+      : {
+          top: 110,
+          right: 30,
+          bottom: !panelShown ? (noPanel ? 110 : 150) : typeof window === "undefined" ? 400 : Math.round(window.innerHeight * (sheetFull ? 0.8 : 0.46)) + 110,
+          left: 30,
+        };
   const showAllRoutes = () => {
     setFocus(null);
     setShowAll(true);
@@ -325,17 +345,31 @@ export default function Home() {
     }),
   ) as Record<BotKey, LegendBotStatus>;
 
+  const goTab = (t: Tab) => {
+    setTab(t);
+    setRouteView(null);
+    if (t === "insights") setInsightsSeen(true);
+    if (t === "routes") setUnseen(0);
+  };
+  const backToAllRoutes = (unchoose: boolean) => {
+    if (unchoose) setChosen(null);
+    setRouteView(null);
+    setFocus(null);
+    setShowAll(true); // all four drawn with equal emphasis to compare
+    setTab("routes");
+  };
+  backToAllRoutesRef.current = backToAllRoutes;
+
   const onTabKey = (e: React.KeyboardEvent, i: number) => {
     const dir = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 }[e.key];
     if (!dir) return;
     e.preventDefault();
     const next = TABS[(i + dir + TABS.length) % TABS.length].key;
-    setTab(next);
-    if (next === "insights") setInsightsSeen(true);
+    goTab(next);
     document.getElementById(`tab-${next}`)?.focus();
   };
 
-  const panelTitle = { map: "Plan a trip", routes: "Four routes", insights: "Insights" }[tab];
+  const panelTitle = { map: "Map", plan: "Plan a trip", routes: "Four routes", insights: "Insights" }[tab];
 
   return (
     <div className="fixed inset-0 overflow-hidden bg-zinc-100 text-zinc-900">
@@ -346,6 +380,7 @@ export default function Home() {
           destination={first ? first.legs[first.legs.length - 1]?.to : null}
           padding={mapPadding}
           colorBy="mode"
+          lineScale={routeView ? 1.6 : 1}
           showTtc={showTtc}
           bikeStations={bikeStations}
         />
@@ -357,13 +392,13 @@ export default function Home() {
           status={legendStatus}
           hiddenBots={hiddenBots}
           onToggleBot={(k) => setHiddenBots((h) => ({ ...h, [k]: !h[k] }))}
-          onShowAll={showAllRoutes}
+          onShowAll={() => (routeView ? backToAllRoutes(false) : showAllRoutes())}
           highlight={highlight}
           modes={usedModes}
         />
       </div>
 
-      {highlight && done.length > 1 && (
+      {highlight && done.length > 1 && !routeView && (
         <button
           type="button"
           data-testid="show-all-routes"
@@ -375,6 +410,7 @@ export default function Home() {
       )}
 
       {/* Wide screens: tab on the panel's edge that stays visible when the panel is hidden */}
+      {!noPanel && (
       <button
         ref={showPanelBtn}
         type="button"
@@ -396,10 +432,30 @@ export default function Home() {
           </span>
         )}
       </button>
-      {panelHidden && unseen > 0 && (
-        <p role="status" data-testid="routes-ready-notice" className="absolute bottom-20 left-1/2 z-10 -translate-x-1/2 rounded-full bg-zinc-900/90 px-3 py-1.5 text-xs font-medium text-white shadow-lg md:bottom-6">
-          {done.length} of 4 routes ready. Open the panel to compare them.
-        </p>
+      )}
+      {(panelHidden || tab === "map") && !routeView && unseen > 0 && (
+        <button
+          type="button"
+          data-testid="routes-ready-notice"
+          onClick={() => {
+            setHidden(false);
+            goTab("routes");
+          }}
+          className="absolute bottom-20 left-1/2 z-10 -translate-x-1/2 rounded-full bg-zinc-900/90 px-3 py-1.5 text-xs font-medium text-white shadow-lg hover:bg-zinc-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-900 md:bottom-6"
+        >
+          <span role="status">{done.length} of 4 routes ready.</span> Compare them
+        </button>
+      )}
+      {routeView && bots[routeView].route && (
+        <div className="pointer-events-none absolute inset-x-3 bottom-20 z-20 flex justify-center md:right-4 md:bottom-6 md:left-[104px]">
+          <RouteSummary
+            bot={BOTS.find((b) => b.key === routeView)!}
+            route={bots[routeView].route!}
+            deadlineNote={deadlineNote}
+            onBack={() => backToAllRoutes(false)}
+            onChange={() => backToAllRoutes(true)}
+          />
+        </div>
       )}
 
       {/* One nav element: bottom tab bar on phones, slim left rail on wide screens */}
@@ -423,10 +479,7 @@ export default function Home() {
                 aria-selected={active}
                 aria-controls={`panel-${t.key}`}
                 tabIndex={active ? 0 : -1}
-                onClick={() => {
-                  setTab(t.key);
-                  if (t.key === "insights") setInsightsSeen(true);
-                }}
+                onClick={() => goTab(t.key)}
                 onKeyDown={(e) => onTabKey(e, i)}
                 className={`relative flex flex-1 flex-col items-center justify-center gap-0.5 text-[11px] font-medium transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-zinc-900 md:h-14 md:w-14 md:flex-none md:rounded-xl ${active ? "text-zinc-900 md:bg-zinc-100" : "text-zinc-500 hover:text-zinc-800"}`}
               >
@@ -444,9 +497,15 @@ export default function Home() {
         id="main-panel"
         aria-label={panelTitle}
         data-hidden={panelHidden || undefined}
-        inert={wide && panelHidden}
+        inert={noPanel || (wide && panelHidden)}
         className={`absolute inset-x-0 bottom-16 z-10 flex h-[var(--sheet-h)] flex-col overflow-hidden rounded-t-3xl bg-white shadow-[0_-8px_30px_rgba(0,0,0,0.08)] transition-[height,transform,opacity] duration-200 motion-reduce:transition-none md:inset-x-auto md:top-4 md:bottom-auto md:left-[104px] md:h-auto md:max-h-[calc(100%-2rem)] md:w-[var(--panel-w)] md:rounded-2xl md:shadow-lg md:ring-1 md:ring-black/5 ${panelHidden ? "md:pointer-events-none md:-translate-x-[calc(100%+8rem)] md:opacity-0" : ""}`}
-        style={{ "--sheet-h": panelHidden ? "3.75rem" : sheetFull ? "calc(100dvh - 7rem)" : "46dvh", "--panel-w": `${PANEL_W[tab]}px` } as React.CSSProperties}
+        style={
+          {
+            "--sheet-h": panelHidden ? "3.75rem" : sheetFull ? "calc(100dvh - 7rem)" : "46dvh",
+            "--panel-w": `${PANEL_W[tab] || 400}px`,
+            display: noPanel ? "none" : undefined,
+          } as React.CSSProperties
+        }
       >
         {/* Phones: tap the handle to step peek -> half -> full, or drag it up and down. */}
         <button
@@ -519,9 +578,9 @@ export default function Home() {
           </ul>
         </header>
 
-        {/* MAP tab */}
+        {/* PLAN tab */}
         <div inert={!wide && panelHidden} className="contents">
-        <div id="panel-map" role="tabpanel" aria-labelledby="tab-map" hidden={tab !== "map"} className="flex min-h-0 flex-1 flex-col">
+        <div id="panel-plan" role="tabpanel" aria-labelledby="tab-plan" hidden={tab !== "plan"} className="flex min-h-0 flex-1 flex-col">
           <form
             className="flex min-h-0 flex-1 flex-col"
             onSubmit={(e) => {
@@ -702,6 +761,7 @@ export default function Home() {
                   setChosen(b.key);
                   setFocus(b.key);
                   setShowAll(false);
+                  setRouteView(b.key);
                 }}
               />
             ))}

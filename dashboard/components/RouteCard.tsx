@@ -1,8 +1,9 @@
 "use client";
 import type { BotKey, BotState } from "@/lib/bots";
 import { STATUS_CHIP } from "@/lib/bots";
-import { MODES, legColor, legMode } from "@/lib/modes";
-import ModeBadge, { ModeLine } from "@/components/ModeBadge";
+import { legColor, legMode, MODES } from "@/lib/modes";
+import ModeBadge from "@/components/ModeBadge";
+import LegTimeline from "@/components/LegTimeline";
 
 type Bot = { key: BotKey; name: string; color: string; blurb: string };
 
@@ -114,28 +115,9 @@ export default function RouteCard({
                   ? ` · ${deadlineNote}`
                   : r.meets_deadline !== undefined && (r.meets_deadline ? " · makes your deadline" : ` · misses your deadline (leave by ${r.leave_by})`)}
               </p>
-              <ol className="mt-2 flex flex-col text-sm" data-testid={chosen ? "itinerary" : `itinerary-${bot.key}`}>
-                {r.legs.map((l, i) => {
-                  const mode = legMode(l, r.id);
-                  const color = legColor(l, mode);
-                  return (
-                    <li key={i} className="flex gap-2">
-                      <span className="w-14 shrink-0 pt-0.5 text-right text-xs whitespace-nowrap tabular-nums leading-5 text-zinc-500">{Math.round(l.duration_s / 60)} min</span>
-                      {/* timeline: mode icon, then a stretch of line drawn like the map draws this mode */}
-                      <span className="flex w-6 shrink-0 flex-col items-center">
-                        <ModeBadge mode={mode} color={color} />
-                        {i < r.legs.length - 1 && <span className="flex min-h-3 flex-1 justify-center overflow-hidden"><ModeLine mode={mode} color={color} vertical length={40} /></span>}
-                      </span>
-                      <span className="min-w-0 pb-1 leading-5 text-zinc-800">
-                        <span className="block text-[11px] font-semibold text-zinc-500">{MODES[mode].label}</span>
-                        {l.label}
-                        {l.cost ? <span className="text-zinc-500"> · ${l.cost.toFixed(2)}</span> : null}
-                        {l.provenance === "estimated" && <span className="ml-1 rounded bg-zinc-100 px-1 text-[10px] text-zinc-600">estimated</span>}
-                      </span>
-                    </li>
-                  );
-                })}
-              </ol>
+              <div className="mt-2">
+                <LegTimeline route={r} testid={chosen ? "itinerary" : `itinerary-${bot.key}`} />
+              </div>
               {r.notes?.length ? (
                 <ul className="mt-2 flex flex-col gap-0.5 text-xs text-zinc-500">
                   {r.notes.map((n) => (

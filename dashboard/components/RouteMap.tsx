@@ -72,7 +72,7 @@ const OFFSET_PX = 5; // routes side by side: neighbours on the same street are t
  * small sideways offset so routes sharing a street or subway line stay visible next to each other, plus a label
  * naming the bot(s) that found it. Hidden routes (legend eye toggles) still count for the map fit.
  */
-function drawByMode(m: maplibregl.Map, routes: MapRoute[], bounds: maplibregl.LngLatBounds, markers: maplibregl.Marker[]) {
+function drawByMode(m: maplibregl.Map, routes: MapRoute[], bounds: maplibregl.LngLatBounds, markers: maplibregl.Marker[], scale = 1) {
   routes.forEach((r) => r.candidate.legs.forEach((l) => l.geometry.forEach(([la, lo]) => bounds.extend([lo, la]))));
   const groups: MapRoute[][] = [];
   routes
@@ -95,14 +95,14 @@ function drawByMode(m: maplibregl.Map, routes: MapRoute[], bounds: maplibregl.Ln
       m.addSource(id, { type: "geojson", data: { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: coords } } });
       const mode = legMode(leg, rs[0].candidate.id);
       const st = MODES[mode];
-      const w = dim ? Math.max(2.5, st.width * 0.55) : st.width;
+      const w = (dim ? Math.max(2.5, st.width * 0.55) : st.width) * scale;
       if (mode !== "walk") {
         m.addLayer({
           id: `${id}-casing`,
           type: "line",
           source: id,
           layout: { "line-cap": "round", "line-join": "round" },
-          paint: { "line-color": dim ? "#ffffff" : st.casing, "line-width": w + (dim ? 2.5 : 3.5), "line-opacity": dim ? 0.8 : 0.95, "line-offset": offset },
+          paint: { "line-color": dim ? "#ffffff" : st.casing, "line-width": w + (dim ? 2.5 : 3.5) * scale, "line-opacity": dim ? 0.8 : 0.95, "line-offset": offset },
         });
       }
       m.addLayer({
@@ -156,6 +156,7 @@ export default function RouteMap({
   showTtc = false,
   bikeStations = null,
   colorBy = "route",
+  lineScale = 1,
 }: {
   routes: MapRoute[];
   origin?: [number, number] | null; // [lat, lon]
@@ -164,6 +165,7 @@ export default function RouteMap({
   showTtc?: boolean; // TTC subway/streetcar lines from /ttc-lines.geojson
   bikeStations?: BikeStation[] | null; // null hides the Bike Share layer
   colorBy?: "route" | "mode"; // "route": one colour per route (planner); "mode": each leg by transport mode (home)
+  lineScale?: number; // thicker lines for the clean single-route view
 }) {
   const el = useRef<HTMLDivElement>(null);
   const map = useRef<maplibregl.Map | null>(null);
@@ -281,7 +283,7 @@ export default function RouteMap({
       markers.current.forEach((k) => k.remove());
       markers.current = [];
       const bounds = new maplibregl.LngLatBounds();
-      if (colorBy === "mode") drawByMode(m, routes, bounds, markers.current);
+      if (colorBy === "mode") drawByMode(m, routes, bounds, markers.current, lineScale);
       else {
         // planner: one colour per route; dimmed routes first so the highlighted one is drawn on top
         const ordered = [...routes].sort((a, b) => Number(a.emphasized !== false) - Number(b.emphasized !== false));
@@ -337,7 +339,7 @@ export default function RouteMap({
       }
     };
     if (ready.current) draw();
-  }, [routes, origin, destination, colorBy, styleGen]);
+  }, [routes, origin, destination, colorBy, styleGen, lineScale]);
 
   return <div ref={el} className="h-full w-full" data-testid="map" role="application" aria-label="Route map of Toronto" />;
 }
