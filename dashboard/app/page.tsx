@@ -7,6 +7,7 @@ import InsightsPanel from "@/components/InsightsPanel";
 import RouteCard from "@/components/RouteCard";
 import BotDrawer from "@/components/BotDrawer";
 import RouteSummary from "@/components/RouteSummary";
+import RouteChips from "@/components/RouteChips";
 import LayerToggles from "@/components/LayerToggles";
 import MapLegend, { LegendBotStatus } from "@/components/MapLegend";
 import TripOptions, { Priority } from "@/components/TripOptions";
@@ -326,13 +327,17 @@ export default function Home() {
       ? { top: 70, right: 270, bottom: 300, left: RAIL_W + 40 } // summary strip along the bottom
       : { top: 110, right: 30, bottom: 360, left: 30 }
     : wide
-      ? { top: 60, right: 270, bottom: 60, left: RAIL_W + (panelShown ? PANEL_W[tab] : 0) + 40 } // right: Layers + Legend column
+      ? { top: 60, right: 270, bottom: 100, left: RAIL_W + (panelShown ? PANEL_W[tab] : 0) + 40 } // right: Layers + Legend; bottom: route chips
       : {
           top: 110,
           right: 30,
           bottom: !panelShown ? (noPanel ? 110 : 150) : typeof window === "undefined" ? 400 : Math.round(window.innerHeight * (sheetFull ? 0.8 : 0.46)) + 110,
           left: 30,
         };
+  // Route visibility (chips on the map and eyes in the legend share it). Cards in the Routes tab are never hidden.
+  const toggleBot = (k: BotKey) => setHiddenBots((h) => ({ ...h, [k]: !h[k] }));
+  const soloBot = (k: BotKey) => setHiddenBots(Object.fromEntries(BOTS.map((b) => [b.key, b.key !== k])));
+  const showEveryRoute = () => setHiddenBots({});
   const showAllRoutes = () => {
     setFocus(null);
     setShowAll(true);
@@ -391,7 +396,7 @@ export default function Home() {
         <MapLegend
           status={legendStatus}
           hiddenBots={hiddenBots}
-          onToggleBot={(k) => setHiddenBots((h) => ({ ...h, [k]: !h[k] }))}
+          onToggleBot={toggleBot}
           onShowAll={() => (routeView ? backToAllRoutes(false) : showAllRoutes())}
           highlight={highlight}
           modes={usedModes}
@@ -403,7 +408,7 @@ export default function Home() {
           type="button"
           data-testid="show-all-routes"
           onClick={showAllRoutes}
-          className="absolute top-3 left-1/2 z-10 -translate-x-1/2 rounded-full bg-white px-4 py-2 text-xs font-semibold text-zinc-900 shadow-lg ring-1 ring-black/5 hover:bg-zinc-50 focus-visible:outline-2 focus-visible:outline-zinc-900 md:top-4"
+          className="absolute top-16 left-1/2 z-10 -translate-x-1/2 rounded-full bg-white px-4 py-2 text-xs font-semibold text-zinc-900 shadow-lg ring-1 ring-black/5 hover:bg-zinc-50 focus-visible:outline-2 focus-visible:outline-zinc-900 md:top-4"
         >
           Show all {done.length} routes
         </button>
@@ -433,6 +438,22 @@ export default function Home() {
         )}
       </button>
       )}
+      {done.length > 0 && !routeView && (
+        <div
+          className="absolute top-3 right-[104px] left-3 z-10 overflow-x-auto md:top-auto md:right-4 md:bottom-6 md:left-[var(--chips-left)] md:flex md:justify-center md:overflow-visible"
+          style={{ "--chips-left": `${RAIL_W + (panelShown ? PANEL_W[tab] : 0) + 16}px` } as React.CSSProperties}
+        >
+          <div className="w-max">
+            <RouteChips
+              found={{ cheap: !!bots.cheap.route, fastest: !!bots.fastest.route, green: !!bots.green.route, best: !!bots.best.route }}
+              hidden={hiddenBots}
+              onToggle={toggleBot}
+              onSolo={soloBot}
+              onShowAll={showEveryRoute}
+            />
+          </div>
+        </div>
+      )}
       {(panelHidden || tab === "map") && !routeView && unseen > 0 && (
         <button
           type="button"
@@ -441,7 +462,7 @@ export default function Home() {
             setHidden(false);
             goTab("routes");
           }}
-          className="absolute bottom-20 left-1/2 z-10 -translate-x-1/2 rounded-full bg-zinc-900/90 px-3 py-1.5 text-xs font-medium text-white shadow-lg hover:bg-zinc-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-900 md:bottom-6"
+          className="absolute bottom-20 left-1/2 z-10 -translate-x-1/2 rounded-full bg-zinc-900/90 px-3 py-1.5 text-xs font-medium text-white shadow-lg hover:bg-zinc-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-900 md:bottom-20"
         >
           <span role="status">{done.length} of 4 routes ready.</span> Compare them
         </button>

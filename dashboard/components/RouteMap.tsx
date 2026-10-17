@@ -70,10 +70,12 @@ const OFFSET_PX = 5; // routes side by side: neighbours on the same street are t
 /**
  * Home map: every leg in its transport mode's style. All found routes are drawn at once; each distinct route gets a
  * small sideways offset so routes sharing a street or subway line stay visible next to each other, plus a label
- * naming the bot(s) that found it. Hidden routes (legend eye toggles) still count for the map fit.
+ * naming the bot(s) that found it. Hidden routes (route chips, legend eyes) are left out, and the map refits to what is shown.
  */
 function drawByMode(m: maplibregl.Map, routes: MapRoute[], bounds: maplibregl.LngLatBounds, markers: maplibregl.Marker[], scale = 1) {
-  routes.forEach((r) => r.candidate.legs.forEach((l) => l.geometry.forEach(([la, lo]) => bounds.extend([lo, la]))));
+  // fit to the routes that are shown (all of them if every one is hidden)
+  const shown = routes.filter((r) => r.visible !== false);
+  (shown.length ? shown : routes).forEach((r) => r.candidate.legs.forEach((l) => l.geometry.forEach(([la, lo]) => bounds.extend([lo, la]))));
   const groups: MapRoute[][] = [];
   routes
     .filter((r) => r.visible !== false)
@@ -331,8 +333,8 @@ export default function RouteMap({
       };
       mk(origin, "#18181b", "Start", "A");
       mk(destination, "#18181b", "Destination", "B");
-      // refit only when the set of routes or endpoints changes, not when one is highlighted
-      const sig = JSON.stringify([routes.map((r) => r.id), origin, destination]);
+      // refit when the set of shown routes or the endpoints change, not when one is highlighted
+      const sig = JSON.stringify([routes.filter((r) => r.visible !== false).map((r) => r.id), origin, destination]);
       if (!bounds.isEmpty() && sig !== fitted.current) {
         fitted.current = sig;
         m.fitBounds(bounds, { padding: pad.current, duration: 500, maxZoom: 15 });
