@@ -109,9 +109,11 @@ def combine(per_leg_daily: list[dict[str, float]], slack_s: float, road_sigma_s:
 
 
 def _delay_factors(legs: list[dict]) -> list[dict]:
-    """'What could delay you': one item per leg with a real live signal attached by schedule.retime()
-    (TomTom's current ratio, or an observed TTC delay folded into a scheduled departure), each with its
-    source and a timestamp; legs with no live signal get one item labelled as a default, not omitted."""
+    """'What could delay you': one item per leg with a real live signal (TomTom's current ratio, an
+    observed TTC delay folded into a scheduled departure, or an active TTC service alert), each with
+    its source and a timestamp; legs with no live signal get one item labelled as a default, not
+    omitted. Alerts come from the official GTFS-RT feed (backend/ingest.py's parse_alerts), stored in
+    Tiger Data's ttc_alerts table."""
     now = time.time()
     out = []
     for l in legs:
@@ -128,6 +130,14 @@ def _delay_factors(legs: list[dict]) -> list[dict]:
         elif "ESTIMATED" in src or "ESTIMATED" in prov:
             out.append({"text": f"{label}: no live delay signal for this leg, timing is a typical-pattern estimate",
                         "source": "typical pattern", "timestamp": now, "default": True})
+        if route_id := l.get("route_id"):
+            try:
+                alerts = store.active_alerts(route_id)
+            except Exception:
+                alerts = []
+            for a in alerts:
+                text = a.get("header_text") or f"{a.get('effect') or 'disruption'} ({a.get('cause') or 'unknown cause'})"
+                out.append({"text": f"{label}: {text}", "source": "TTC service alert (GTFS-RT)", "timestamp": a["ts"], "default": False})
     return out
 
 

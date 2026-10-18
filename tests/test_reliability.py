@@ -128,7 +128,8 @@ def test_transfer_miss_adds_the_real_next_departure_wait(monkeypatch):
     assert out["history_days"] == 2
 
 
-def test_delay_factors_reflects_live_signals_on_the_legs():
+def test_delay_factors_reflects_live_signals_on_the_legs(monkeypatch):
+    monkeypatch.setattr(reliability.store, "active_alerts", lambda route_id, **k: [])
     legs = [
         {"label": "Drive", "duration_s": 600, "timing": "road", "traffic_source": "TomTom live (not stored)", "traffic_factor": 1.4},
         {"label": "Subway", "duration_s": 600, "route_id": "1", "provenance": "scheduled departure (GTFS) + observed delay 90 s (TTC realtime)"},
@@ -138,3 +139,26 @@ def test_delay_factors_reflects_live_signals_on_the_legs():
     assert out[0]["source"] == "TomTom (live, not stored)" and out[0]["default"] is False
     assert out[1]["source"] == "TTC realtime (GTFS-RT)" and "90 s" in out[1]["text"]
     assert len(out) == 2  # the plain walk leg has no live signal and contributes nothing
+
+
+def test_delay_factors_includes_active_ttc_service_alerts(monkeypatch):
+    monkeypatch.setattr(
+        reliability.store, "active_alerts",
+        lambda route_id, **k: [{"ts": 1700000000.0, "cause": "CONSTRUCTION", "effect": "DETOUR", "header_text": "Streetcars detoured", "description_text": None}]
+        if route_id == "504" else [],
+    )
+    legs = [{"label": "504 King streetcar", "duration_s": 600, "route_id": "504"}]
+    out = reliability._delay_factors(legs)
+    assert len(out) == 1
+    assert out[0]["source"] == "TTC service alert (GTFS-RT)"
+    assert "Streetcars detoured" in out[0]["text"]
+    assert out[0]["timestamp"] == 1700000000.0
+
+
+def test_delay_factors_tolerates_a_broken_alerts_lookup(monkeypatch):
+    def boom(route_id, **k):
+        raise RuntimeError("db unreachable")
+
+    monkeypatch.setattr(reliability.store, "active_alerts", boom)
+    out = reliability._delay_factors([{"label": "Subway", "duration_s": 60, "route_id": "1"}])
+    assert out == []  # no crash, just nothing to report
