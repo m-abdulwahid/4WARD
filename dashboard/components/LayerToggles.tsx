@@ -75,7 +75,7 @@ export default function LayerToggles({ onTtc, onBikes }: { onTtc: (on: boolean) 
       </button>
       <h2 className="hidden px-1 pb-1 text-[11px] font-semibold tracking-wide text-zinc-500 uppercase md:block">Layers</h2>
       <div id="layer-list" className={`${open ? "mt-1 w-56" : "hidden"} md:mt-0 md:block`}>
-      <Toggle id="layer-ttc" label="TTC lines" on={ttc} onChange={() => setTtc((v) => !v)}>
+      <Toggle id="layer-ttc" label="Transit lines" on={ttc} onChange={() => setTtc((v) => !v)}>
         {ttcMeta ? `${ttcMeta.source}, built ${time(new Date(ttcMeta.built_at))}.` : "Loading…"} Stops joined in order, not exact track.
       </Toggle>
       <Toggle id="layer-bikes" label="Bike Share stations" on={bikes} onChange={() => setBikes((v) => !v)}>

@@ -1,7 +1,7 @@
 "use client";
 import { BOTS, BotKey } from "@/lib/bots";
 
-/** On/off switch drawn like the Layers panel switches (TTC lines, Bike Share stations), sized for a chip. */
+/** On/off switch drawn like the Layers panel switches (Transit lines, Bike Share stations), sized for a chip. */
 function Switch({ on }: { on: boolean }) {
   return (
     <span aria-hidden className={`relative h-4 w-7 shrink-0 rounded-full transition-colors duration-150 ${on ? "bg-zinc-900" : "bg-zinc-300"}`}>
