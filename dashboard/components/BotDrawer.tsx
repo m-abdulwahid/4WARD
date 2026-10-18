@@ -69,8 +69,12 @@ function ZoomView({ zoom, bots, onClose }: { zoom: NonNullable<Zoom>; bots: Reco
         </figcaption>
         {/* phones: taller than the tile and swipeable sideways, so it is a real zoom */}
         <div data-testid="bot-zoom-screen" className="relative overflow-x-auto bg-zinc-100 max-sm:h-[min(62dvh,560px)] sm:aspect-[1000/640]">
-          {s.frame ? (
-            // updates live: a new frame for this bot re-renders the same image
+          {s.liveViewUrl ? (
+            // Steel's own embeddable live view: a real, interactive cloud browser, not a screenshot -- the
+            // viewer can watch it think in real time and even take over, per Steel's intended embed.
+            <iframe src={s.liveViewUrl} title={`${bot.name} bot's live browser (Steel)`} className="h-full w-full border-0" />
+          ) : s.frame ? (
+            // local backend only: no Steel live view, fall back to the bot's own periodic screenshot
             // eslint-disable-next-line @next/next/no-img-element
             <img
               src={`data:image/jpeg;base64,${s.frame}`}
@@ -153,11 +157,11 @@ export default function BotDrawer({ bots, running, onClose }: { bots: Record<Bot
       }}
       type="button"
       data-testid={`bot-${k}-screen`}
-      disabled={!s.frame}
+      disabled={!s.frame && !s.liveViewUrl}
       aria-label={`Enlarge the ${name} bot's screen`}
       aria-haspopup="dialog"
       onPointerEnter={(e) => {
-        if (!hover || e.pointerType !== "mouse" || !s.frame || zoomRef.current?.pinned) return;
+        if (!hover || e.pointerType !== "mouse" || (!s.frame && !s.liveViewUrl) || zoomRef.current?.pinned) return;
         clearTimer();
         // short delay: passing over a screen on the way somewhere else does not open it
         hoverTimer.current = setTimeout(() => setZoom({ key: k, pinned: false }), zoomRef.current ? 0 : 140);
@@ -173,7 +177,10 @@ export default function BotDrawer({ bots, running, onClose }: { bots: Record<Bot
       }}
       className="relative block aspect-[1000/640] w-full shrink-0 cursor-zoom-in bg-zinc-100 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-zinc-900 disabled:cursor-default"
     >
-      {s.frame ? (
+      {s.liveViewUrl ? (
+        // visual only here (pointer-events disabled) so hover-to-zoom still works; the enlarged view is interactive
+        <iframe src={s.liveViewUrl} title={`${name} bot's live browser (Steel)`} className="pointer-events-none h-full w-full border-0" tabIndex={-1} />
+      ) : s.frame ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img src={`data:image/jpeg;base64,${s.frame}`} alt={`${name} bot's browser view`} className="h-full w-full object-cover" />
       ) : (

@@ -42,6 +42,10 @@ async def _execute(run: dict, options: dict) -> None:
         except Exception:
             pass  # persistence must never break a run
         await _fanout(run, {"type": "run_done", "status": run["status"], "result": _public(out)})
+    except asyncio.CancelledError:  # the user stopped the run: cancelling the task closes every bot's browser/session
+        run["status"] = "cancelled"
+        run["result"] = {"error": "Stopped by the user.", "results": []}
+        await _fanout(run, {"type": "run_done", "status": "cancelled", "result": run["result"]})
     except Exception as e:  # never leave a run hanging
         run["status"] = "error"
         run["result"] = {"error": f"{type(e).__name__}: {e}", "results": []}
@@ -56,6 +60,17 @@ def start(prompt: str, **options) -> dict:
     run = _new(prompt)
     run["task"] = asyncio.create_task(_execute(run, options))
     return run
+
+
+def cancel(run: dict) -> bool:
+    """Stop a running run: cancels the orchestrator task, which propagates into every bot's browser context
+    and Steel session so they close/release instead of running to their step or time cap. Returns False if
+    the run had already finished (nothing to cancel)."""
+    task = run.get("task")
+    if run["status"] != "running" or not task or task.done():
+        return False
+    task.cancel()
+    return True
 
 
 def snapshot(run: dict) -> dict:

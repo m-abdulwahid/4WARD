@@ -142,6 +142,14 @@ async def get_run(rid: str):
     return runs.snapshot(run)
 
 
+@app.post("/run/{rid}/cancel")
+async def cancel_run(rid: str):
+    run = runs.RUNS.get(rid)
+    if not run:
+        raise HTTPException(404, "unknown run")
+    return {"cancelled": runs.cancel(run)}
+
+
 @app.websocket("/ws/run/{rid}")
 async def ws_run(ws: WebSocket, rid: str):
     run = runs.RUNS.get(rid)

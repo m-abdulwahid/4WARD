@@ -48,7 +48,10 @@ class steel_session:
             await asyncio.to_thread(self._client.sessions.release, self._session.id)
             raise
         ctx = self._browser.contexts[0] if self._browser.contexts else await self._browser.new_context()
-        return SteelBot(self._session.id, self._session.session_viewer_url, ctx)
+        # debug_url (.../player) is the public, unauthenticated embeddable live view. session_viewer_url
+        # (app.steel.dev/...) is Steel's own dashboard and requires signing into a Steel account to view --
+        # wrong for embedding in front of our own users.
+        return SteelBot(self._session.id, self._session.debug_url, ctx)
 
     async def __aexit__(self, *exc) -> bool:
         if self._browser:

@@ -24,6 +24,7 @@ export type StepLogEntry = {
 export type BotState = {
   status: BotStatus;
   frame?: string;
+  liveViewUrl?: string; // Steel's own embeddable live view (BROWSER_BACKEND=steel only); preferred over `frame` when set
   lastReason?: string;
   steps: number;
   log: StepLogEntry[];

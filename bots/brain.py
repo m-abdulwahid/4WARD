@@ -204,6 +204,9 @@ Actions run in order in the browser. Rules:
   that route_id.
 - If there was nothing to explore (no park-ride-lot or depart-at-input controls, or you already explored once), go
   straight from PHASE 2 to selecting, confirming, and finishing.
+- If planner_state is "error", you may fix one obvious problem once (for example a typo) and recompute. If it is
+  still "error" after that one retry, stop guessing: finish immediately with route_id null and the error as your
+  reason. The trip is most likely genuinely out of scope or unresolvable; do not keep retrying spellings.
 - Never pick a route that is unavailable, misses the deadline (if a deadline-meeting route exists), or is impractical
   (e.g. hours slower than alternatives, or hostile to the user's bags).
 - Do not repeat actions that already took effect. Only ever try one alternative setting, never more.

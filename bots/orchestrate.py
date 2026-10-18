@@ -7,6 +7,8 @@ from typing import Awaitable, Callable
 import httpx
 from playwright.async_api import async_playwright
 
+from backend import geo
+
 from . import critic
 from .nlp import parse_prompt
 from .profiles import PROFILES
@@ -94,6 +96,17 @@ async def _resolve_diversity(keys, results, user, base_url, emit, max_steps, tim
     return results
 
 
+async def _out_of_scope(user: dict) -> str | None:
+    """Same Toronto-only check the engine applies to every /route call, run up front so an unresolvable
+    trip never spins up four cloud browsers (or lets a bot loop forever guessing spellings) just to fail."""
+    misses = [label for label, q in (("origin", user["origin"]), ("destination", user["destination"]))
+              if not await geo.geocode(q)]
+    if not misses:
+        return None
+    bad = " and ".join(f"{label} ({user[label]!r})" for label in misses)
+    return f"Could not find {bad} in Toronto -- 4WARD only covers the Toronto area."
+
+
 async def run_all(prompt: str, emit: Emit | None = None, base_url: str | None = None, keys: list[str] | None = None,
                   stream_frames: bool = True, max_steps: int = 24, timeout_s: float = 120) -> dict:
     base_url = base_url or os.environ.get("DASHBOARD_URL", "http://localhost:3000")
@@ -102,6 +115,9 @@ async def run_all(prompt: str, emit: Emit | None = None, base_url: str | None = 
     await _emit(emit, {"type": "parsed", **user})
     if not user["origin"] or not user["destination"]:
         return {"error": "Could not find an origin and destination in the prompt.", "parsed": user, "results": []}
+    scope_error = await _out_of_scope(user)
+    if scope_error:
+        return {"error": scope_error, "parsed": user, "results": []}
     keys = keys or list(PROFILES)
     await _warm_up(base_url)
     backend = os.environ.get("BROWSER_BACKEND", "local").lower()

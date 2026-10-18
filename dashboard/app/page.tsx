@@ -30,6 +30,8 @@ const RouteMap = dynamic(() => import("@/components/RouteMap"), { ssr: false });
 function friendlyError(msg: string): string {
   if (/origin and destination/i.test(msg))
     return "We couldn't tell where you're starting and where you're going. Write it as \u201cA to B\u201d, for example \u201cYork U to CN Tower\u201d, then press Plan my trip again.";
+  if (/toronto area/i.test(msg))
+    return `${msg} Try a street address, an intersection, or a landmark inside the city, then press Plan my trip again.`;
   if (/failed to fetch|networkerror|load failed|refused the run/i.test(msg))
     return "We can't reach the 4WARD backend right now. Check that it is running (start.ps1), then press Plan my trip again.";
   if (/lost connection/i.test(msg)) return "The connection to the 4WARD backend dropped while the bots were working. Check that it is running, then press Plan my trip again.";
@@ -130,6 +132,7 @@ export default function Home() {
   const [priority, setPriority] = useState<Priority>(null);
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const runIdRef = useRef<string | null>(null);
   const t0 = useRef(0);
   const wide = useWide();
   const closeDrawer = useCallback(() => setDrawer(false), []);
@@ -166,6 +169,12 @@ export default function Home() {
     }
     return t;
   };
+
+  const stop = useCallback(() => {
+    const id = runIdRef.current;
+    if (!id) return;
+    fetch(`${API}/run/${id}/cancel`, { method: "POST", headers: apiHeaders() }).catch(() => {});
+  }, []);
 
   const backToPrompt = () => {
     setTab("plan");
@@ -240,6 +249,7 @@ export default function Home() {
       });
       if (!r.ok) throw new Error(`Backend refused the run (${r.status})`);
       const { id } = await r.json();
+      runIdRef.current = id;
       const ws = new WebSocket(runWebSocketUrl(id));
       wsRef.current = ws;
       ws.onmessage = (m) => {
@@ -250,6 +260,7 @@ export default function Home() {
           if (ev.origin && ev.destination) checkPlaces(ev.origin, ev.destination);
         }
         else if (ev.type === "frame") patch(k, { frame: ev.data });
+        else if (ev.type === "steel_session") patch(k, { liveViewUrl: ev.live_view_url });
         else if (ev.type === "status") patch(k, { status: ev.status });
         else if (ev.type === "step")
           setBots((b) => ({
@@ -267,9 +278,12 @@ export default function Home() {
         }
         else if (ev.type === "run_done") {
           setRunning(false);
-          if (ev.result?.error) {
+          runIdRef.current = null;
+          if (ev.status === "cancelled") {
+            // the user asked for this: no error banner, just let them see or edit what's there
+          } else if (ev.result?.error) {
             setError(friendlyError(ev.result.error));
-            if (/origin and destination/i.test(ev.result.error)) backToPrompt();
+            if (/origin and destination|toronto area/i.test(ev.result.error)) backToPrompt();
           }
           ws.close();
         }
@@ -776,7 +790,19 @@ export default function Home() {
                 </div>
               );
             })()}
-            {running && <p className="text-xs text-zinc-500" role="status">Bots working… {elapsed}s</p>}
+            {running && (
+              <p className="flex items-center justify-between gap-2 text-xs text-zinc-500" role="status">
+                Bots working… {elapsed}s
+                <button
+                  type="button"
+                  data-testid="stop-run"
+                  onClick={stop}
+                  className="shrink-0 rounded-full bg-zinc-100 px-2.5 py-1 text-[11px] font-semibold text-zinc-800 hover:bg-zinc-200 focus-visible:outline-2 focus-visible:outline-zinc-900"
+                >
+                  Stop
+                </button>
+              </p>
+            )}
             {error && (
               <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-800">
                 {error}
