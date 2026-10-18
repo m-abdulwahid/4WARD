@@ -95,6 +95,15 @@ export default function RouteCard({
             Over your ${budget.toFixed(2)} budget
           </p>
         )}
+        {r?.pareto_optimal && (
+          <p
+            data-testid={`pareto-${bot.key}`}
+            title="No other computed route beats this one on time, cost, CO2, transfers, and walking distance all at once."
+            className="mt-2 inline-block rounded-full bg-zinc-900 px-2 py-0.5 text-[11px] font-semibold text-white"
+          >
+            Pareto-optimal
+          </p>
+        )}
         {r ? null : state.status === "FAILED" ? (
           <p className="mt-2 text-xs text-red-700">Failed: {state.error ?? "unknown error"}. The other bots are unaffected.</p>
         ) : (

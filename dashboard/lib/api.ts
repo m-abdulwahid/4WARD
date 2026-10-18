@@ -47,6 +47,7 @@ export type Candidate = {
   leave_by?: string;
   violates?: string[];
   reliability?: { reliability_pct: number; history_days: number; basis: string };
+  pareto_optimal?: boolean;
 };
 
 export type RouteResult = {

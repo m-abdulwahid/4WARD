@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, Field
 
-from . import bikeshare, fares, osm, reliability, transit
+from . import bikeshare, fares, osm, pareto, reliability, transit
 from .config import SPEEDS_KMH, traffic_multiplier
 from .geo import haversine_km
 
@@ -235,6 +235,7 @@ async def plan(origin: tuple[float, float], dest: tuple[float, float], c: Constr
             out.append(_finish("park_ride", "Park & ride", legs, c, depart, hour, max(0, opt["boardings"] - 1),
                                [f"Park at {lot[0]} (lot fee is an estimate), then TTC ${fare:.2f}"]))
 
+    pareto.mark(out)
     await asyncio.to_thread(reliability.annotate, out, c.model_dump(), depart)
 
     return {"origin": list(origin), "destination": list(dest), "depart": depart.strftime("%H:%M"),
