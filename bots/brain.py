@@ -285,7 +285,7 @@ class FallbackBrain:
                 if self.queue[0].get("action") == "click" and self.queue[0].get("testid") == "compute-route":
                     fix = _mode_fix(page, self.want_modes)
                     if fix:
-                        return {**fix, "brain": "gemini"}
+                        return {**fix, "brain": "rule"}  # deterministic correction, not Gemini's own plan
                 a = self.queue.pop(0)
                 validate(a, page)
                 _keeps_shared_setup(a, page, self.rule.want_modes)
