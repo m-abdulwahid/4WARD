@@ -88,7 +88,8 @@ async def health():
 
 @app.get("/assumptions")
 async def assumptions():
-    return {"assumptions": ASSUMPTIONS, "emissions_g_per_km": EMISSIONS_G_PER_KM, "speeds_kmh": SPEEDS_KMH}
+    return {"assumptions": ASSUMPTIONS, "emissions_g_per_km": EMISSIONS_G_PER_KM, "speeds_kmh": SPEEDS_KMH,
+            "park_ride_lots": [name for name, _lat, _lon in planner.PARK_RIDE_LOTS]}
 
 
 @app.get("/suggest")

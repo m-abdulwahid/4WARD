@@ -29,6 +29,7 @@ class Constraints(BaseModel):
     modes: list[str] = Field(default_factory=lambda: list(ALL_MODES))
     depart_at: str | None = None       # "HH:MM" local time, default now
     arrive_by: str | None = None       # "HH:MM"
+    park_ride_lot: str | None = None   # overrides the auto-picked "nearest lot" (see PARK_RIDE_LOTS)
     bags: int = 0
     no_presto: bool = False
     has_car: bool = False
@@ -210,10 +211,13 @@ async def plan(origin: tuple[float, float], dest: tuple[float, float], c: Constr
                                    max(0, opt["boardings"] - 1), notes))
 
         elif m == "park_ride":
-            lot = min(PARK_RIDE_LOTS, key=lambda p: haversine_km(origin, (p[1], p[2])) + 0.6 * haversine_km((p[1], p[2]), dest) * 0 )
-            # choose the lot closest to origin that lies roughly toward the destination
-            cands = [p for p in PARK_RIDE_LOTS if haversine_km((p[1], p[2]), dest) < haversine_km(origin, dest)]
-            lot = min(cands or PARK_RIDE_LOTS, key=lambda p: haversine_km(origin, (p[1], p[2])))
+            chosen_lot = next((p for p in PARK_RIDE_LOTS if p[0] == c.park_ride_lot), None) if c.park_ride_lot else None
+            if chosen_lot:
+                lot = chosen_lot
+            else:
+                # choose the lot closest to origin that lies roughly toward the destination
+                cands = [p for p in PARK_RIDE_LOTS if haversine_km((p[1], p[2]), dest) < haversine_km(origin, dest)]
+                lot = min(cands or PARK_RIDE_LOTS, key=lambda p: haversine_km(origin, (p[1], p[2])))
             lp = (lot[1], lot[2])
             d1 = await osm.leg("drive", origin, lp)
             opt = await transit.rail_option(lp, dest, hour)

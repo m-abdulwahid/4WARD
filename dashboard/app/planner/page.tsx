@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
-import { ALL_MODES, Candidate, Constraints, RouteResult, computeRoute, suggest } from "@/lib/api";
+import { ALL_MODES, Candidate, Constraints, RouteResult, computeRoute, getAssumptions, suggest } from "@/lib/api";
 
 const RouteMap = dynamic(() => import("@/components/RouteMap"), { ssr: false });
 
@@ -40,6 +40,11 @@ declare global {
   interface Window {
     __4ward?: Record<string, unknown>;
   }
+}
+
+/** Stable, reversible id for a lot name so bots (and tests) can target a specific button. */
+function lotSlug(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
 }
 
 function Place({ id, label, value, onChange }: { id: string; label: string; value: string; onChange: (v: string) => void }) {
@@ -109,7 +114,12 @@ export default function Planner() {
     avoid_stairs: false,
     depart_at: "",
     arrive_by: "",
+    park_ride_lot: null,
   });
+  const [lots, setLots] = useState<string[]>([]);
+  useEffect(() => {
+    getAssumptions().then((a) => setLots(a.park_ride_lots));
+  }, []);
   const [state, setState] = useState<"idle" | "loading" | "done" | "error">("idle");
   const [error, setError] = useState("");
   const [result, setResult] = useState<RouteResult | null>(null);
@@ -235,6 +245,37 @@ export default function Planner() {
             </label>
           </div>
         </fieldset>
+
+        {c.modes.includes("park_ride") && lots.length > 0 && (
+          <fieldset>
+            <legend className="text-xs font-medium text-zinc-600">
+              Park &amp; ride lot <span className="text-zinc-400">(which station to drive to is not something the engine searches on its own)</span>
+            </legend>
+            <div className="mt-1 flex flex-wrap gap-1.5">
+              <button
+                type="button"
+                data-testid="park-ride-lot-auto"
+                aria-pressed={!c.park_ride_lot}
+                onClick={() => setC((p) => ({ ...p, park_ride_lot: null }))}
+                className={`rounded-full border px-3 py-1 text-xs ${!c.park_ride_lot ? "border-orange-700 bg-orange-700 text-white" : "border-zinc-200 bg-white text-zinc-700"}`}
+              >
+                Auto (nearest)
+              </button>
+              {lots.map((name) => (
+                <button
+                  key={name}
+                  type="button"
+                  data-testid={`park-ride-lot-${lotSlug(name)}`}
+                  aria-pressed={c.park_ride_lot === name}
+                  onClick={() => setC((p) => ({ ...p, park_ride_lot: name }))}
+                  className={`rounded-full border px-3 py-1 text-xs ${c.park_ride_lot === name ? "border-orange-700 bg-orange-700 text-white" : "border-zinc-200 bg-white text-zinc-700"}`}
+                >
+                  {name}
+                </button>
+              ))}
+            </div>
+          </fieldset>
+        )}
 
         <button
           type="button"

@@ -7,12 +7,16 @@ returns something invalid (so one bad model response never kills a bot).
 import asyncio
 import json
 import os
+from datetime import datetime, timedelta
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel
 
 from . import scoring
 from .profiles import PROFILES, modes_for
+
+TORONTO = ZoneInfo("America/Toronto")
 
 ALL_MODES = ["walk", "bike", "ebike", "bikeshare", "drive", "rideshare", "transit", "park_ride"]
 FLAGS = ["no_presto", "has_car", "ev", "has_bike", "has_ebike", "avoid_stairs"]
@@ -28,6 +32,43 @@ class Action(BaseModel):
 
 def _control(page: dict, testid: str) -> dict | None:
     return next((c for c in page["controls"] if c["testid"] == testid), None)
+
+
+def _shift_hhmm(value: str, delta_min: int) -> str | None:
+    try:
+        t = datetime.strptime(value.strip(), "%H:%M")
+    except ValueError:
+        return None
+    return (t + timedelta(minutes=delta_min)).strftime("%H:%M")
+
+
+# A knob tuple is (kind, testid, text, reason, revert) where `revert` is the testid to click back
+# (for a "click" knob, e.g. a lot button) or the original text value to retype (for a "type" knob).
+Knob = tuple[str, str, str | None, str, str]
+
+
+def _knob_variant(page: dict) -> Knob | None:
+    """One alternative setting worth trying for a dimension the routing engine itself never searches
+    (which park & ride lot, what time to leave) -- never a transit/walk/bike/drive choice, those are
+    already provably optimal (Dijkstra / OSM). Returns None when there is nothing honest to try."""
+    lot_ctls = [c for c in page["controls"] if c["testid"].startswith("park-ride-lot-")]
+    if lot_ctls:
+        current = next((c["testid"] for c in lot_ctls if c.get("pressed") == "true"), "park-ride-lot-auto")
+        other = next((c["testid"] for c in lot_ctls if c["testid"] != current), None)
+        if other:
+            return ("click", other, None, "try a different park & ride lot", current)
+    depart_ctl = _control(page, "depart-at-input")
+    if depart_ctl is not None:
+        value = (depart_ctl.get("value") or "").strip()
+        if value:
+            shifted = _shift_hhmm(value, -15)
+            if shifted:
+                return ("type", "depart-at-input", shifted, "try leaving 15 min earlier", value)
+        else:
+            shifted = _shift_hhmm(datetime.now(TORONTO).strftime("%H:%M"), 15)
+            if shifted:
+                return ("type", "depart-at-input", shifted, "try leaving 15 min later than right now", value)
+    return None
 
 
 def validate(a: dict, page: dict) -> Action:
@@ -46,12 +87,24 @@ def validate(a: dict, page: dict) -> Action:
 
 
 class RuleBrain:
+    """Deterministic state-reconciler. After the first compute, it tries exactly one alternate setting
+    for a dimension the engine itself never searches (park & ride lot, departure time), compares the two
+    results with its own objective's scoring, and commits to whichever is actually better -- real,
+    bounded iteration, never a second guess at transit/walk/bike/drive routing."""
+
     name = "rule"
 
     def __init__(self, profile_key: str, user: dict, avoid_ids: set[str] | None = None):
         self.p, self.user = profile_key, user
         self.want_modes = modes_for(profile_key, user["constraints"])
         self.avoid_ids = avoid_ids or set()
+        self.explore = "baseline"  # baseline -> change -> await -> (revert -> await_revert) -> select
+        self.baseline: dict | None = None
+        self.variant: dict | None = None
+        self.knob: Knob | None = None
+
+    def _pool(self, page: dict) -> list[dict]:
+        return [cd for cd in page["candidates"] if cd["id"] not in self.avoid_ids] or page["candidates"]
 
     def next_action(self, page: dict, history: list[dict]) -> dict:
         u, c = self.user, self.user["constraints"]
@@ -74,7 +127,6 @@ class RuleBrain:
                 ctl = _control(page, tid)
                 if ctl and (ctl.get("value") or "") != want:
                     return {"action": "type", "testid": tid, "text": want, "reason": f"set {tid}"}
-        if page["state"] == "idle":
             return {"action": "click", "testid": "compute-route", "reason": "compute routes for the chosen modes"}
         if page["state"] == "loading":
             return {"action": "wait", "reason": "routes are computing"}
@@ -82,9 +134,45 @@ class RuleBrain:
             return {"action": "finish", "route_id": None, "reason": f"planner error: {page.get('error')}"}
         if page["confirmed"]:
             return {"action": "finish", "route_id": page["confirmed"], "reason": "route confirmed"}
+
+        top = scoring.best(self.p, self._pool(page), c)
+
+        if self.explore == "baseline":
+            self.baseline = top
+            self.knob = _knob_variant(page) if top else None
+            if not self.knob:
+                self.explore = "select"
+            else:
+                self.explore = "await_variant"
+                kind, testid, text, reason, _revert = self.knob
+                return {"action": kind, "testid": testid, **({"text": text} if text is not None else {}), "reason": reason}
+
+        if self.explore == "await_variant":
+            self.explore = "variant_computing"
+            return {"action": "click", "testid": "compute-route", "reason": "recompute with that alternate setting to compare"}
+
+        if self.explore == "variant_computing":
+            self.variant = top
+            kind, testid, _text, _reason, revert = self.knob
+            winner = scoring.rank(self.p, [x for x in (self.baseline, self.variant) if x], c)
+            keep_variant = bool(winner) and self.variant and winner[0]["id"] == self.variant["id"]
+            if keep_variant or not self.baseline:
+                self.explore = "select"
+            else:
+                self.explore = "await_revert"
+                if kind == "click":
+                    return {"action": "click", "testid": revert, "reason": "revert: the original setting scored better for this objective"}
+                return {"action": "type", "testid": testid, "text": revert, "reason": "revert: the original setting scored better for this objective"}
+
+        if self.explore == "await_revert":
+            self.explore = "revert_computing"
+            return {"action": "click", "testid": "compute-route", "reason": "recompute after reverting"}
+
+        if self.explore == "revert_computing":
+            self.explore = "select"
+
         if not page["selected"]:
-            pool = [cd for cd in page["candidates"] if cd["id"] not in self.avoid_ids] or page["candidates"]
-            top = scoring.best(self.p, pool, c)
+            top = scoring.best(self.p, self._pool(page), c)
             if not top:
                 return {"action": "finish", "route_id": None, "reason": "no usable route found"}
             return {"action": "click", "testid": f"select-route-{top['id']}",
@@ -104,11 +192,21 @@ Actions run in order in the browser. Rules:
 - PHASE 1 (planner_state idle): plan every setup action in one go - type origin and destination, turn ON only the travel modes
   worth exploring for YOUR objective (and OFF the rest), turn on constraint toggles matching the user's facts (has_car, no_presto,
   ...), set bags and times - and END the plan with click compute-route. Do not plan anything after compute-route.
-- PHASE 2 (planner_state done, route_options present): choose the best option for YOUR objective, then plan:
-  click select-route-<id>, click confirm-route, finish with that route_id.
+- PHASE 2 (planner_state done, route_options present, first time you see results): the engine's own transit/walk/bike/drive
+  routing is already provably optimal (Dijkstra for transit, OSM for walk/bike/drive) -- never re-try those, that would be
+  theater. But if controls named `park-ride-lot-<name>` or `depart-at-input` are present, THOSE are dimensions the engine
+  never searches by itself. Try exactly ONE alternative there (a different lot, or shift the departure time by about
+  15 minutes), then click compute-route again, and nothing else, in this plan.
+- PHASE 3 (you have now seen two computes: your original setting and one alternative): compare the two sets of
+  route_options using YOUR objective's priorities only. If the alternative is not actually better for your objective,
+  undo it (click the original lot button back, or retype the original departure time) and click compute-route once more
+  to restore it. Then plan: click select-route-<id> for whichever setting actually won, click confirm-route, finish with
+  that route_id.
+- If there was nothing to explore (no park-ride-lot or depart-at-input controls, or you already explored once), go
+  straight from PHASE 2 to selecting, confirming, and finishing.
 - Never pick a route that is unavailable, misses the deadline (if a deadline-meeting route exists), or is impractical
   (e.g. hours slower than alternatives, or hostile to the user's bags).
-- Do not repeat actions that already took effect.
+- Do not repeat actions that already took effect. Only ever try one alternative setting, never more.
 """
 
 

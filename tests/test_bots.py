@@ -1,7 +1,7 @@
 import pytest
 
 from bots import critic, nlp, scoring
-from bots.brain import FallbackBrain, RuleBrain, validate
+from bots.brain import FallbackBrain, RuleBrain, _knob_variant, _shift_hhmm, validate
 from bots.profiles import modes_for
 
 
@@ -83,6 +83,61 @@ def test_rule_brain_avoid_ids_falls_back_when_pool_empties():
     all_ids = {c["id"] for c in CANDS}
     a = RuleBrain("cheap", user, avoid_ids=all_ids).next_action(page, [])
     assert a["action"] == "click" and a["testid"].startswith("select-route-")
+
+
+def test_shift_hhmm():
+    assert _shift_hhmm("08:00", -15) == "07:45"
+    assert _shift_hhmm("00:05", -15) == "23:50"
+    assert _shift_hhmm("not-a-time", -15) is None
+
+
+def test_knob_variant_prefers_lot_over_depart_time():
+    page = {**PAGE, "controls": PAGE["controls"]
+            + [{"testid": "depart-at-input", "value": "08:00"},
+               {"testid": "park-ride-lot-auto", "pressed": "true"}, {"testid": "park-ride-lot-finch", "pressed": "false"}]}
+    assert _knob_variant(page) == ("click", "park-ride-lot-finch", None, "try a different park & ride lot", "park-ride-lot-auto")
+
+
+def test_knob_variant_none_when_no_knob_controls_present():
+    assert _knob_variant(PAGE) is None
+
+
+VARIANT_BETTER = [cand("rail_fast", 40, 1.0, 0.5)]
+VARIANT_WORSE = [cand("rail_slow", 90, 10.0, 2.0)]
+
+
+def test_rule_brain_explores_depart_time_and_keeps_better_variant():
+    """A real, bounded iteration: try leaving 15 min earlier, recompute, and keep it since it won."""
+    user = {"origin": "a", "destination": "b", "constraints": {"bags": 0}}
+    page = {**PAGE, "controls": PAGE["controls"] + [{"testid": "depart-at-input", "value": "08:00"}],
+            "state": "done", "selected": None, "confirmed": None, "candidates": CANDS}
+    rb = RuleBrain("cheap", user)
+    a1 = rb.next_action(page, [])
+    assert a1 == {"action": "type", "testid": "depart-at-input", "text": "07:45", "reason": "try leaving 15 min earlier"}
+    a2 = rb.next_action(page, [])
+    assert a2["action"] == "click" and a2["testid"] == "compute-route"
+    variant_page = {**page, "candidates": VARIANT_BETTER}
+    a3 = rb.next_action(variant_page, [])
+    assert a3["testid"] == "select-route-rail_fast"
+
+
+def test_rule_brain_explores_depart_time_and_reverts_when_worse():
+    """If the alternative is worse for this objective, undo it instead of settling for it."""
+    user = {"origin": "a", "destination": "b", "constraints": {"bags": 0}}
+    page = {**PAGE, "controls": PAGE["controls"] + [{"testid": "depart-at-input", "value": "08:00"}],
+            "state": "done", "selected": None, "confirmed": None, "candidates": CANDS}
+    rb = RuleBrain("cheap", user)
+    rb.next_action(page, [])  # types the alternate departure time
+    rb.next_action(page, [])  # clicks compute-route
+    variant_page = {**page, "candidates": VARIANT_WORSE}
+    a3 = rb.next_action(variant_page, [])
+    assert a3 == {"action": "type", "testid": "depart-at-input", "text": "08:00",
+                  "reason": "revert: the original setting scored better for this objective"}
+    a4 = rb.next_action(variant_page, [])
+    assert a4["action"] == "click" and a4["testid"] == "compute-route"
+    reverted_page = {**page, "candidates": CANDS}
+    a5 = rb.next_action(reverted_page, [])
+    assert a5["testid"] == "select-route-rail"
 
 
 def test_critic_flags_deadline_and_walk_and_bags():

@@ -62,6 +62,7 @@ export type Constraints = {
   modes: string[];
   depart_at?: string | null;
   arrive_by?: string | null;
+  park_ride_lot?: string | null;
   bags: number;
   no_presto: boolean;
   has_car: boolean;
@@ -94,5 +95,15 @@ export async function suggest(q: string): Promise<{ name: string; lat: number; l
     return (await r.json()).results;
   } catch {
     return [];
+  }
+}
+
+export async function getAssumptions(): Promise<{ park_ride_lots: string[] }> {
+  try {
+    const r = await fetch(`${API}/assumptions`);
+    const j = await r.json();
+    return { park_ride_lots: j.park_ride_lots ?? [] };
+  } catch {
+    return { park_ride_lots: [] };
   }
 }
