@@ -137,7 +137,16 @@ export default function Home() {
         if (ev.type === "parsed") setParsed(ev);
         else if (ev.type === "frame") patch(k, { frame: ev.data });
         else if (ev.type === "status") patch(k, { status: ev.status });
-        else if (ev.type === "step") setBots((b) => ({ ...b, [k]: { ...b[k], steps: ev.n, lastReason: ev.reason ?? b[k].lastReason } }));
+        else if (ev.type === "step")
+          setBots((b) => ({
+            ...b,
+            [k]: {
+              ...b[k],
+              steps: ev.n,
+              lastReason: ev.reason ?? b[k].lastReason,
+              log: [...b[k].log, { n: ev.n, action: ev.action, testid: ev.testid, text: ev.text, reason: ev.reason, outcome: ev.outcome }],
+            },
+          }));
         else if (ev.type === "result") patch(k, { status: ev.status, route: ev.route, brain: ev.brain, elapsed: ev.elapsed_s, error: ev.error });
         else if (ev.type === "run_done") {
           setRunning(false);

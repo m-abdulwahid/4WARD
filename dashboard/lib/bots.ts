@@ -12,11 +12,21 @@ export type BotKey = (typeof BOTS)[number]["key"];
 
 export type BotStatus = "WAITING" | "SCANNING" | "ROUTING" | "DONE" | "FAILED";
 
+export type StepLogEntry = {
+  n: number;
+  action?: string;
+  testid?: string;
+  text?: string;
+  reason?: string;
+  outcome?: string;
+};
+
 export type BotState = {
   status: BotStatus;
   frame?: string;
   lastReason?: string;
   steps: number;
+  log: StepLogEntry[];
   brain?: string;
   elapsed?: number;
   route?: Candidate | null;
@@ -24,10 +34,10 @@ export type BotState = {
 };
 
 export const blankBots = (): Record<BotKey, BotState> => ({
-  cheap: { status: "WAITING", steps: 0 },
-  fastest: { status: "WAITING", steps: 0 },
-  green: { status: "WAITING", steps: 0 },
-  best: { status: "WAITING", steps: 0 },
+  cheap: { status: "WAITING", steps: 0, log: [] },
+  fastest: { status: "WAITING", steps: 0, log: [] },
+  green: { status: "WAITING", steps: 0, log: [] },
+  best: { status: "WAITING", steps: 0, log: [] },
 });
 
 export const STATUS_CHIP: Record<BotStatus, { label: string; cls: string }> = {
