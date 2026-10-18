@@ -2,10 +2,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { API, Candidate, Clarification, ClarifyOption, TripPoint, apiHeaders, runWebSocketUrl } from "@/lib/api";
-import { BOTS, BotKey, BotState, blankBots, groupByRoute } from "@/lib/bots";
+import { BOTS, BotKey, BotState, blankBots } from "@/lib/bots";
 import RouteCard, { StatusChip } from "@/components/RouteCard";
 import BotDrawer from "@/components/BotDrawer";
-import RouteChips from "@/components/RouteChips";
 import LayerToggles from "@/components/LayerToggles";
 import MapLegend, { LegendBotStatus } from "@/components/MapLegend";
 import TripOptions from "@/components/TripOptions";
@@ -59,20 +58,13 @@ function readBudget(text: string): number | null {
   return m ? Number(m[1]) : null;
 }
 
-const LEFT_W = 380;
-const RIGHT_W = 400;
-
-function useWide() {
-  const [wide, setWide] = useState(true);
-  useEffect(() => {
-    const q = window.matchMedia("(min-width: 1024px)");
-    const on = () => setWide(q.matches);
-    on();
-    q.addEventListener("change", on);
-    return () => q.removeEventListener("change", on);
-  }, []);
-  return wide;
-}
+const LEFT_W = 400;
+const RIGHT_W = 240;
+const LEFT_TABS = [
+  { key: "plan", label: "Plan a trip" },
+  { key: "routes", label: "Routes" },
+  { key: "insights", label: "Insights" },
+] as const;
 
 export default function Home() {
   const [prompt, setPrompt] = useState("");
@@ -102,15 +94,15 @@ export default function Home() {
   const [sortBy, setSortBy] = useState<SortKey>("default"); // neutral card order only; nothing is ever highlighted by it
   const [drawer, setDrawer] = useState(false);
   const [timelapseOpen, setTimelapseOpen] = useState(false);
-  const [leftTab, setLeftTab] = useState<"plan" | "insights">("plan");
+  const [leftTab, setLeftTab] = useState<(typeof LEFT_TABS)[number]["key"]>("plan");
   const [leftOpen, setLeftOpen] = useState(true); // collapses the left panel to map-only on wide screens
+  const [rightOpen, setRightOpen] = useState(true); // collapses the legend panel, for the same reason
   const [hiddenBots, setHiddenBots] = useState<Partial<Record<BotKey, boolean>>>({});
   const [showAll, setShowAll] = useState(false); // "Show all routes": ignore the chosen route's highlight
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const runIdRef = useRef<string | null>(null);
   const t0 = useRef(0);
-  const wide = useWide();
   const closeDrawer = useCallback(() => setDrawer(false), []);
 
   useEffect(() => {
@@ -269,7 +261,7 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prompt, patch]);
 
-  // Routes that fit the trip (deadline, budget, bags, car/bike). Everything below (map, chips, legend, cards,
+  // Routes that fit the trip (deadline, budget, bags, car/bike). Everything below (map, legend, cards,
   // timelapse, priority pick) uses this, so a route that breaks a constraint is left out everywhere.
   const fit = useMemo(
     () =>
@@ -282,8 +274,7 @@ export default function Home() {
     [bots, parsed, budget, deadlineNote],
   );
   const done = BOTS.filter((b) => bots[b.key].route && fit.shown.includes(b.key));
-  const [hoverBot, setHoverBot] = useState<BotKey | null>(null); // chip under the pointer (or focused)
-  const highlight = (hoverBot && !hiddenBots[hoverBot] ? hoverBot : null) ?? focus ?? (showAll ? null : chosen);
+  const highlight = focus ?? (showAll ? null : chosen);
 
   // Card order for the neutral sort control. The default keeps the fixed bot order; a bot with no route sorts last.
   const sortedBots = useMemo(() => {
@@ -298,21 +289,19 @@ export default function Home() {
     };
     return [...BOTS].sort((a, b) => value(a.key) - value(b.key));
   }, [bots, sortBy]);
-  // Bots that landed on the same route share one drawn line / marker, labelled with every objective it wins.
-  const routeGroups = useMemo(() => groupByRoute(BOTS, bots).filter((g) => bots[g[0].key].route), [bots]);
+  // Every bot draws its own line and gets its own card, even when two bots land on the identical route:
+  // the map offsets same-street lines side by side, and the legend's eye toggles always list all four.
   const mapRoutes = useMemo(
     () =>
-      routeGroups
-        .filter((g) => g.some((b) => fit.shown.includes(b.key)))
-        .map((g) => ({
-          id: g[0].key,
-          color: g[0].color,
-          label: g.map((b) => b.name).join(" + "),
-          candidate: bots[g[0].key].route as Candidate,
-          emphasized: highlight ? g.some((b) => b.key === highlight) : true,
-          visible: g.some((b) => !hiddenBots[b.key]),
-        })),
-    [routeGroups, bots, highlight, hiddenBots, fit],
+      BOTS.filter((b) => bots[b.key].route && fit.shown.includes(b.key)).map((b) => ({
+        id: b.key,
+        color: b.color,
+        label: b.name,
+        candidate: bots[b.key].route as Candidate,
+        emphasized: highlight ? b.key === highlight : true,
+        visible: !hiddenBots[b.key],
+      })),
+    [bots, highlight, hiddenBots, fit],
   );
   // Modes the finished routes use, with the colour each is drawn in (TTC line colour for transit).
   const usedModes = useMemo(() => {
@@ -329,20 +318,18 @@ export default function Home() {
   const first = done[0] ? bots[done[0].key].route : null;
   const waypoints = useMemo(() => points.slice(1, -1).map((p) => ({ lat: p.lat, lon: p.lon, name: p.name })), [points]);
   const timelapseRoutes = useMemo(
-    () => routeGroups.map((g) => ({ key: g[0].key, name: g.map((b) => b.name).join(" + "), color: g[0].color, candidate: bots[g[0].key].route as Candidate })),
-    [routeGroups, bots],
+    () => BOTS.filter((b) => bots[b.key].route).map((b) => ({ key: b.key, name: b.name, color: b.color, candidate: bots[b.key].route as Candidate })),
+    [bots],
   );
 
-  const mapPadding: MapPadding = wide
-    ? { top: 16, right: 266, bottom: 16, left: 16 } // Layers + Legend float top-right of the map area
-    : { top: 16, right: 16, bottom: 110, left: 16 };
-  // Route visibility (chips on the map and eyes in the legend share it).
+  // Legend and layers now live in a persistent side panel, not floating over the map, so the map only
+  // needs a small margin for markers near the edge.
+  const mapPadding: MapPadding = { top: 16, right: 16, bottom: 16, left: 16 };
   const toggleBot = (k: BotKey) => setHiddenBots((h) => ({ ...h, [k]: !h[k] }));
   const selectFromMap = (id: string) => {
     setShowAll(false);
     setFocus(id as BotKey);
   };
-  const showEveryRoute = () => setHiddenBots({});
   const showAllRoutes = () => {
     setFocus(null);
     setShowAll(true);
@@ -365,7 +352,7 @@ export default function Home() {
 
   return (
     <div className="fixed inset-0 flex flex-col overflow-hidden bg-zinc-100 text-zinc-900">
-      {/* Header: wordmark, data status, Tiger Data chip, Watch the bots */}
+      {/* Header: wordmark, data status, Watch the bots */}
       <header className="z-30 flex min-h-14 shrink-0 flex-wrap items-center gap-2 border-b border-zinc-200 bg-white px-4 py-2 lg:h-14 lg:flex-nowrap lg:gap-3 lg:py-0">
         <p className="text-base font-extrabold tracking-tight">
           4W<span className="text-emerald-600">.</span>
@@ -401,9 +388,9 @@ export default function Home() {
         </div>
       </header>
 
-      {/* Body: trip box + timeline | map | route cards. Stacks vertically below lg. */}
+      {/* Body: left panel (Plan / Routes / Insights) | map | legend panel. Stacks vertically below lg. */}
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto lg:flex-row lg:overflow-hidden">
-        {/* LEFT: a page selector (Plan / Insights), collapsible to map-only on wide screens */}
+        {/* LEFT: a page selector, collapsible to map-only on wide screens */}
         <section
           aria-label="Left panel"
           data-testid="left-panel"
@@ -411,10 +398,7 @@ export default function Home() {
           style={{ "--left-w": `${LEFT_W}px` } as React.CSSProperties}
         >
           <div role="tablist" aria-label="Left panel pages" className="flex shrink-0 gap-1 rounded-full bg-zinc-100 p-1 text-xs font-semibold">
-            {([
-              { key: "plan", label: "Plan a trip" },
-              { key: "insights", label: "Insights" },
-            ] as const).map((t) => (
+            {LEFT_TABS.map((t) => (
               <button
                 key={t.key}
                 type="button"
@@ -422,7 +406,7 @@ export default function Home() {
                 aria-selected={leftTab === t.key}
                 data-testid={`left-tab-${t.key}`}
                 onClick={() => setLeftTab(t.key)}
-                className={`flex-1 rounded-full px-3 py-1.5 transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-900 ${leftTab === t.key ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-500 hover:text-zinc-700"}`}
+                className={`flex-1 rounded-full px-2 py-1.5 transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-900 ${leftTab === t.key ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-500 hover:text-zinc-700"}`}
               >
                 {t.label}
               </button>
@@ -430,6 +414,69 @@ export default function Home() {
           </div>
 
           {leftTab === "insights" && <InsightsTab />}
+
+          {leftTab === "routes" && (
+            <div className="flex min-h-0 flex-1 flex-col gap-2">
+              <label className="flex items-center justify-between gap-2 text-xs text-zinc-600">
+                Order cards by
+                <select
+                  data-testid="sort-routes"
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value as SortKey)}
+                  className="rounded-lg bg-white px-2 py-1 text-xs text-zinc-800 ring-1 ring-zinc-200 focus-visible:outline-2 focus-visible:outline-zinc-900"
+                >
+                  <option value="default">Bot order</option>
+                  <option value="cost">Cost (lowest first)</option>
+                  <option value="time">Time (shortest first)</option>
+                  <option value="co2">CO₂e (lowest first)</option>
+                  <option value="ontime">On-time % (highest first)</option>
+                </select>
+              </label>
+              {!running && !parsed && !error && (
+                <p className="rounded-xl bg-zinc-50 p-4 text-sm text-zinc-600 ring-1 ring-zinc-200">
+                  Plan a trip on the Plan tab. All four bots land here, each with its own route, timeline and card.
+                </p>
+              )}
+              {sortedBots
+                .filter((b) => !fit.excluded.includes(b.key))
+                .sort((a, b) => {
+                  if (fit.fallback?.kind !== "deadline") return 0;
+                  const ia = fit.shown.indexOf(a.key);
+                  const ib = fit.shown.indexOf(b.key);
+                  return ia >= 0 && ib >= 0 ? ia - ib : 0;
+                })
+                .map((b) => (
+                  <RouteCard
+                    key={b.key}
+                    bot={b}
+                    state={bots[b.key]}
+                    running={running}
+                    budget={budget}
+                    deadlineNote={deadlineNote}
+                    arrival={fit.fallback?.kind === "deadline"}
+                    focused={focus === b.key}
+                    chosen={chosen === b.key}
+                    onFocus={() => {
+                      const open = focus === b.key;
+                      setShowAll(open); // clicking the open card again goes back to all routes
+                      setFocus(open ? null : b.key);
+                    }}
+                    onChoose={() => {
+                      setChosen(b.key);
+                      setFocus(b.key);
+                      setShowAll(false);
+                    }}
+                    onUseAlternative={(botKey, alt) => patch(botKey, { route: alt })}
+                  />
+                ))}
+              <p
+                className="px-1 text-[11px] leading-relaxed text-zinc-500"
+                title="From the routing engine, not the AI. Transit fares follow TTC and GO rules; driving, parking, rideshare costs and traffic are estimated."
+              >
+                Numbers come from the routing engine, not the AI. Transit fares follow TTC rules; driving, parking, rideshare costs and traffic are estimated. Transit schedule data is from TTC GTFS.
+              </p>
+            </div>
+          )}
 
           {leftTab === "plan" && (
           <>
@@ -519,7 +566,7 @@ export default function Home() {
             </p>
           </form>
 
-          {/* Timeline: run progress, once a trip has started */}
+          {/* Timeline: run progress, once a trip has started. Always lists all four bots. */}
           {(running || parsed || error) && (
             <div data-testid="run-timeline" className="flex flex-col gap-2 border-t border-zinc-100 pt-3">
               <h2 className="text-xs font-semibold tracking-wide text-zinc-500 uppercase">Timeline</h2>
@@ -700,7 +747,7 @@ export default function Home() {
           </svg>
         </button>
 
-        {/* MIDDLE: map */}
+        {/* MIDDLE: map, full width when both side panels are collapsed */}
         <div className="relative h-[50vh] shrink-0 lg:h-full lg:flex-1">
           <RouteMap
             routes={mapRoutes}
@@ -715,102 +762,38 @@ export default function Home() {
             showTtc={showTtc}
             bikeStations={bikeStations}
           />
-          <div className="absolute top-3 right-3 z-10 flex flex-col items-end gap-2">
-            <LayerToggles onTtc={setShowTtc} onBikes={setBikeStations} />
-            <MapLegend
-              status={legendStatus}
-              hiddenBots={hiddenBots}
-              onToggleBot={toggleBot}
-              onShowAll={showAllRoutes}
-              highlight={highlight}
-              modes={usedModes}
-            />
-          </div>
-          {done.length > 0 && (
-            <div className="absolute bottom-3 left-1/2 z-10 -translate-x-1/2">
-              <RouteChips
-                found={{
-                  cheap: fit.shown.includes("cheap"),
-                  fastest: fit.shown.includes("fastest"),
-                  green: fit.shown.includes("green"),
-                  reliable: fit.shown.includes("reliable"),
-                }}
-                hidden={hiddenBots}
-                onToggle={toggleBot}
-                onShowAll={showEveryRoute}
-                onHover={setHoverBot}
-              />
-            </div>
-          )}
         </div>
 
-        {/* RIGHT: the four route cards */}
+        {/* Collapse handle: hides the legend panel to map-only on wide screens */}
+        <button
+          type="button"
+          data-testid="toggle-right-panel"
+          aria-expanded={rightOpen}
+          aria-label={rightOpen ? "Hide the legend panel" : "Show the legend panel"}
+          onClick={() => setRightOpen((v) => !v)}
+          className="hidden shrink-0 items-center justify-center bg-zinc-100 text-zinc-400 hover:bg-zinc-200 hover:text-zinc-700 focus-visible:outline-2 focus-visible:outline-zinc-900 lg:flex lg:h-full lg:w-3"
+        >
+          <svg aria-hidden viewBox="0 0 24 24" className={`h-3 w-3 transition-transform duration-150 ${rightOpen ? "rotate-180" : ""}`} fill="currentColor">
+            <path d="M15 6l-6 6 6 6" />
+          </svg>
+        </button>
+
+        {/* RIGHT: legend and map layers, persistent instead of floating over the map */}
         <section
-          aria-label="Four routes"
-          className="flex min-h-0 shrink-0 flex-col gap-2 overflow-y-auto bg-zinc-50 p-3 lg:h-full lg:w-[var(--right-w)] lg:border-l lg:border-zinc-200"
+          aria-label="Map legend and layers"
+          data-testid="right-panel"
+          className={`flex shrink-0 flex-col gap-2 overflow-y-auto bg-zinc-50 lg:h-full ${rightOpen ? "p-3 lg:w-[var(--right-w)] lg:border-l lg:border-zinc-200" : "hidden lg:w-0 lg:border-l-0 lg:p-0"}`}
           style={{ "--right-w": `${RIGHT_W}px` } as React.CSSProperties}
         >
-          <label className="flex items-center justify-between gap-2 text-xs text-zinc-600">
-            Order cards by
-            <select
-              data-testid="sort-routes"
-              value={sortBy}
-              onChange={(e) => setSortBy(e.target.value as SortKey)}
-              className="rounded-lg bg-white px-2 py-1 text-xs text-zinc-800 ring-1 ring-zinc-200 focus-visible:outline-2 focus-visible:outline-zinc-900"
-            >
-              <option value="default">Bot order</option>
-              <option value="cost">Cost (lowest first)</option>
-              <option value="time">Time (shortest first)</option>
-              <option value="co2">CO₂e (lowest first)</option>
-              <option value="ontime">On-time % (highest first)</option>
-            </select>
-          </label>
-          {!running && !parsed && !error && (
-            <p className="rounded-xl bg-white p-4 text-sm text-zinc-600 ring-1 ring-zinc-200">Plan a trip on the left. Four bots will each find a route with a different goal.</p>
-          )}
-          {groupByRoute(sortedBots, bots)
-            .filter((group) => group.some((b) => !fit.excluded.includes(b.key)))
-            .sort((ga, gb) => {
-              if (fit.fallback?.kind !== "deadline") return 0;
-              const ia = fit.shown.indexOf(ga[0].key);
-              const ib = fit.shown.indexOf(gb[0].key);
-              return ia >= 0 && ib >= 0 ? ia - ib : 0;
-            })
-            .map((group) => {
-              const lead = group[0];
-              const members = group.map((b) => ({ bot: b, state: bots[b.key] }));
-              return (
-                <RouteCard
-                  key={group.map((b) => b.key).join("+")}
-                  bot={lead}
-                  state={bots[lead.key]}
-                  tags={members}
-                  running={running}
-                  budget={budget}
-                  deadlineNote={deadlineNote}
-                  arrival={fit.fallback?.kind === "deadline"}
-                  focused={group.some((b) => b.key === focus)}
-                  chosen={group.some((b) => b.key === chosen)}
-                  onFocus={() => {
-                    const open = group.some((b) => b.key === focus);
-                    setShowAll(open); // clicking the open card again goes back to all routes
-                    setFocus(open ? null : lead.key);
-                  }}
-                  onChoose={() => {
-                    setChosen(lead.key);
-                    setFocus(lead.key);
-                    setShowAll(false);
-                  }}
-                  onUseAlternative={(botKey, alt) => patch(botKey, { route: alt })}
-                />
-              );
-            })}
-          <p
-            className="px-1 text-[11px] leading-relaxed text-zinc-500"
-            title="From the routing engine, not the AI. Transit fares follow TTC and GO rules; driving, parking, rideshare costs and traffic are estimated."
-          >
-            Numbers come from the routing engine, not the AI. Transit fares follow TTC rules; driving, parking, rideshare costs and traffic are estimated. Transit schedule data is from TTC GTFS.
-          </p>
+          <LayerToggles onTtc={setShowTtc} onBikes={setBikeStations} />
+          <MapLegend
+            status={legendStatus}
+            hiddenBots={hiddenBots}
+            onToggleBot={toggleBot}
+            onShowAll={showAllRoutes}
+            highlight={highlight}
+            modes={usedModes}
+          />
         </section>
       </div>
 

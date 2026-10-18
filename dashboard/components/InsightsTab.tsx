@@ -39,9 +39,11 @@ export default function InsightsTab() {
   if (!live || !ttc) return <p className="rounded-xl bg-zinc-50 p-3 text-sm text-zinc-500">Loading live conditions…</p>;
 
   const bikes = live.latest.bikes;
-  const routesNow = [...live.latest.routes].filter((r) => r.avg_delay_s != null).sort((a, b) => (b.avg_delay_s ?? 0) - (a.avg_delay_s ?? 0)).slice(0, 4);
+  const allRoutesNow = [...live.latest.routes].filter((r) => r.avg_delay_s != null).sort((a, b) => (b.avg_delay_s ?? 0) - (a.avg_delay_s ?? 0));
+  const routesNow = allRoutesNow.slice(0, 4);
   const routeIds = Array.from(new Set(ttc.rows.map((r) => r.route_id))).slice(0, 3);
   const src = sourceLabel(ttc.sources);
+  const worst = allRoutesNow[0]?.avg_delay_s ?? 1;
 
   return (
     <div className="flex flex-col gap-3" data-testid="insights-tab">
@@ -54,7 +56,7 @@ export default function InsightsTab() {
 
       <div className="grid grid-cols-2 gap-2">
         <div className="rounded-xl bg-white p-3 ring-1 ring-zinc-200">
-          <p className="text-[11px] font-medium text-zinc-500">Bike Share</p>
+          <p className="text-[11px] font-medium text-zinc-500">Bike Share 🚲</p>
           {bikes ? (
             <p className="mt-0.5 text-2xl font-bold tabular-nums text-zinc-900">
               {bikes.bikes.toLocaleString()}
@@ -103,6 +105,31 @@ export default function InsightsTab() {
           }))}
         />
       </div>
+
+      <details className="group rounded-xl bg-white p-3 ring-1 ring-zinc-200" data-testid="insights-go-deeper">
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-2 text-[11px] font-semibold text-zinc-600 focus-visible:outline-2 focus-visible:outline-zinc-900">
+          Go deeper: every route right now
+          <span aria-hidden className="text-zinc-400 transition-transform duration-150 group-open:rotate-180">▾</span>
+        </summary>
+        <ul className="mt-2 flex flex-col gap-1.5">
+          {allRoutesNow.map((r) => (
+            <li key={r.route_id} className="flex items-center gap-2 text-xs">
+              <span className="w-10 shrink-0 font-semibold text-zinc-700">{r.route_id}</span>
+              <span className="h-2 flex-1 overflow-hidden rounded-full bg-zinc-100">
+                <span
+                  className="block h-full rounded-full bg-sky-500"
+                  style={{ width: `${Math.max(4, Math.round(((r.avg_delay_s ?? 0) / Math.max(worst, 1)) * 100))}%` }}
+                />
+              </span>
+              <span className="w-12 shrink-0 text-right tabular-nums text-zinc-500">{Math.round(r.avg_delay_s ?? 0)}s</span>
+            </li>
+          ))}
+          {!allRoutesNow.length && <li className="text-xs text-zinc-400">No routes reporting a delay right now, which is its own kind of good news.</li>}
+        </ul>
+        <p className="mt-2 text-[10px] leading-snug text-zinc-400">
+          Every bar is a real TTC route from this minute&rsquo;s poll. The Reliable bot replays weeks of exactly this data to score each route&rsquo;s odds of getting you there on time.
+        </p>
+      </details>
 
       <p className="text-[11px] text-zinc-400">This is what the Reliable bot&rsquo;s on-time % is built from.</p>
     </div>
