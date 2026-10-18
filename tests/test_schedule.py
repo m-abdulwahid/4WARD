@@ -183,7 +183,7 @@ def test_observed_road_conditions_override_typical_only_for_departures_soon(monk
     monkeypatch.setattr(conditions, "_observed", lambda when: 2.0)
     soon, _ = schedule.retime([road(600)], dt(5, 8, 10), now=dt(5, 8, 0))
     far, _ = schedule.retime([road(600)], dt(5, 14, 0), now=dt(5, 8, 0))
-    assert soon[0]["duration_s"] == 1200 and soon[0]["traffic_source"] == "observed"
+    assert soon[0]["duration_s"] == 1200 and soon[0]["traffic_source"] == "TomTom live (not stored)"
     assert far[0]["duration_s"] == 600 * 1.2 and "ESTIMATED" in far[0]["traffic_source"]
 
 
