@@ -57,6 +57,7 @@ export type BotState = {
   alternatives?: Candidate[];
   nextBest?: Candidate | null; // this bot's best DIFFERENT route for its own goal
   error?: string | null;
+  computedAt?: number; // client Date.now() ms when this route arrived, for honest "as of" labels
 };
 
 export const blankBots = (): Record<BotKey, BotState> => ({
