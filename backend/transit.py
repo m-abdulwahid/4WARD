@@ -146,7 +146,8 @@ async def rail_option(a, b, hour: int, walk_weight: float = 1.0) -> dict | None:
                      f"{ln['stops'][nodes[seg['nodes'][-1]][1]]['name']})",
             "from": pts[0], "to": pts[-1], "distance_km": round(dist_km, 3),
             "duration_s": (len(seg["nodes"]) - 1) * (ln["sec_per_stop"] + DWELL_S) + ln["headway_min"] * 30,
-            "geometry": pts, "provenance": "gtfs-static (headway estimated)", "color": ln["color"]})
+            "geometry": pts, "provenance": "gtfs-static (headway estimated)", "color": ln["color"],
+            "route_id": ln["route_id"]})
         prev_end = pts[-1]
     w2 = await osm.leg("walk", tuple(prev_end), b)
     legs.append({"mode": "walk", "label": "Walk to destination", "from": prev_end, "to": list(b),

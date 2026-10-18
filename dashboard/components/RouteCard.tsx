@@ -139,7 +139,11 @@ export default function RouteCard({
                   ))}
                 </ul>
               ) : null}
-              <p className="mt-2 text-xs text-zinc-500">Reliability: not available yet (delay history scoring is not built).</p>
+              <p className="mt-2 text-xs text-zinc-500">
+                {r.reliability
+                  ? `Reliability: made it on ${r.reliability.reliability_pct}% of the last ${r.reliability.history_days} matching day(s) (${r.reliability.basis}, from TTC delay history).`
+                  : "Reliability: not enough TTC delay history yet for this route and time."}
+              </p>
             </div>
           )}
           <button

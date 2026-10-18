@@ -136,6 +136,29 @@ class Store:
                               "WHERE ts >= %s GROUP BY b ORDER BY b", (since,), fetch=True)
         return [{"bucket": int(r[0]), "avg_bikes": r[1], "avg_ebikes": r[2], "avg_docks": r[3], "min_bikes": r[4]} for r in rows]
 
+    def ttc_daily_at_dow_hour(self, route_id: str, dow: int, hour: int, days: int = 56) -> dict[str, float]:
+        """{date_str: avg_delay_s} for this route at this day-of-week/hour, most recent `days` days.
+        Used by reliability scoring to 'replay' historical days. dow: 0=Sunday (matches SQLite %w and
+        Postgres extract(dow)). Times are Toronto-local on Postgres; UTC on the SQLite fallback
+        (acceptable for the offline/local demo path, not used in production with Tiger Data)."""
+        since = int(time.time()) - days * 86400
+        if self.pg:
+            rows = self._exec(
+                "SELECT (date_trunc('day', ts AT TIME ZONE 'America/Toronto'))::date::text, avg(avg_delay_s) "
+                "FROM ttc_route_snapshot WHERE route_id = %s "
+                "AND extract(dow FROM ts AT TIME ZONE 'America/Toronto') = %s "
+                "AND extract(hour FROM ts AT TIME ZONE 'America/Toronto') = %s "
+                "AND ts >= to_timestamp(%s) AND avg_delay_s IS NOT NULL GROUP BY 1",
+                (route_id, dow, hour, since), fetch=True)
+        else:
+            rows = self._exec(
+                "SELECT strftime('%Y-%m-%d', ts, 'unixepoch'), AVG(avg_delay_s) FROM ttc_route_snapshot "
+                "WHERE route_id = %s AND CAST(strftime('%w', ts, 'unixepoch') AS INTEGER) = %s "
+                "AND CAST(strftime('%H', ts, 'unixepoch') AS INTEGER) = %s AND ts >= %s "
+                "AND avg_delay_s IS NOT NULL GROUP BY 1",
+                (route_id, dow, hour, since), fetch=True)
+        return {r[0]: r[1] for r in (rows or []) if r[1] is not None}
+
     def sources(self, hours: int = 24) -> dict:
         since = int(time.time()) - hours * 3600
         ph = "to_timestamp(%s)" if self.pg else "%s"

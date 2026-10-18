@@ -46,6 +46,7 @@ export type Candidate = {
   meets_deadline?: boolean;
   leave_by?: string;
   violates?: string[];
+  reliability?: { reliability_pct: number; history_days: number; basis: string };
 };
 
 export type RouteResult = {
