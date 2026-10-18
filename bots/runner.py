@@ -6,7 +6,9 @@ from typing import Awaitable, Callable
 
 from playwright.async_api import BrowserContext, Page
 
+from . import scoring
 from .brain import FallbackBrain, validate
+from .critic import flags_for
 from .profiles import PROFILES
 
 Emit = Callable[[dict], Awaitable[None] | None]
@@ -58,7 +60,7 @@ async def run_bot(ctx: BrowserContext, key: str, user: dict, base_url: str, emit
     page = ctx.pages[0] if ctx.pages else await ctx.new_page()
     stop = asyncio.Event()
     frame_task = None
-    result = {"bot": key, "name": prof.name, "status": "FAILED", "route": None, "steps": steps, "brain": "rule", "error": None}
+    result = {"bot": key, "name": prof.name, "status": "FAILED", "route": None, "alternatives": [], "steps": steps, "brain": "rule", "error": None}
     try:
         await _emit(emit, {"type": "status", "bot": key, "status": "SCANNING"})
         await page.goto(f"{base_url}/planner?bot={key}", wait_until="domcontentloaded", timeout=60000)
@@ -82,7 +84,12 @@ async def run_bot(ctx: BrowserContext, key: str, user: dict, base_url: str, emit
                 await _emit(emit, {"type": "step", "bot": key, **rec})
                 if rid:
                     chosen = next((c for c in obs["candidates"] if c["id"] == rid), None)
-                    result.update(status="DONE", route=chosen)
+                    # Report this bot's own top 3, not just its winner, computed by the same
+                    # objective-specific scoring it used to pick -- a comparison, not a second search.
+                    top3 = scoring.rank(key, obs["candidates"], user["constraints"])[:3]
+                    for alt in top3:
+                        alt["critic_violations"] = flags_for(alt, user["constraints"])
+                    result.update(status="DONE", route=chosen, alternatives=top3)
                 else:
                     result["error"] = action.get("reason") or "no route"
                 break

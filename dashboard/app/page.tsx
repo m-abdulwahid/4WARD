@@ -262,7 +262,7 @@ export default function Home() {
             },
           }));
         else if (ev.type === "result") {
-          patch(k, { status: ev.status, route: ev.route, brain: ev.brain, elapsed: ev.elapsed_s, error: ev.error });
+          patch(k, { status: ev.status, route: ev.route, alternatives: ev.alternatives, brain: ev.brain, elapsed: ev.elapsed_s, error: ev.error });
           if (panelHiddenRef.current || tabRef.current === "map") setUnseen((u) => u + 1);
         }
         else if (ev.type === "run_done") {
@@ -805,6 +805,7 @@ export default function Home() {
                   setShowAll(false);
                   setRouteView(b.key);
                 }}
+                onUseAlternative={(alt) => patch(b.key, { route: alt })}
               />
             ))}
             <p className="text-[11px] leading-relaxed text-zinc-500">
