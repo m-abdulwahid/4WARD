@@ -338,7 +338,7 @@ async def test_fallback_brain_corrects_a_plan_that_skips_a_required_mode(monkeyp
         {"testid": "compute-route"},
     ]}
     a = await b.next_action(page, [])
-    assert a["brain"] == "gemini" and a["action"] == "click" and a["testid"] == "mode-toggle-drive"
+    assert a["brain"] == "rule" and a["action"] == "click" and a["testid"] == "mode-toggle-drive"
     # once the live toggles actually match, the originally-planned compute-route click is let through
     page["controls"][0]["pressed"] = "true"
     a2 = await b.next_action(page, [])
