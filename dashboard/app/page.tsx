@@ -342,7 +342,6 @@ export default function Home() {
     setShowAll(false);
     setFocus(id as BotKey);
   };
-  const soloBot = (k: BotKey) => setHiddenBots(Object.fromEntries(BOTS.map((b) => [b.key, b.key !== k])));
   const showEveryRoute = () => setHiddenBots({});
   const showAllRoutes = () => {
     setFocus(null);
@@ -456,7 +455,6 @@ export default function Home() {
               found={{ cheap: !!bots.cheap.route, fastest: !!bots.fastest.route, green: !!bots.green.route, best: !!bots.best.route }}
               hidden={hiddenBots}
               onToggle={toggleBot}
-              onSolo={soloBot}
               onShowAll={showEveryRoute}
               onHover={setHoverBot}
             />

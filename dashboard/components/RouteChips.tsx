@@ -12,26 +12,21 @@ function Switch({ on }: { on: boolean }) {
 
 /**
  * Show or hide each bot's route on the map with an on/off switch. Same state as the legend's eye toggles.
- * Double-click a chip (or press its "Only" button) to see that route by itself.
  */
 export default function RouteChips({
   found,
   hidden,
   onToggle,
-  onSolo,
   onShowAll,
   onHover,
 }: {
   found: Record<BotKey, boolean>;
   hidden: Partial<Record<BotKey, boolean>>;
   onToggle: (k: BotKey) => void;
-  onSolo: (k: BotKey) => void;
   onShowAll: () => void;
   onHover: (k: BotKey | null) => void; // pointer over or keyboard focus on a chip highlights its route
 }) {
   const withRoute = BOTS.filter((b) => found[b.key]);
-  const shownKeys = withRoute.filter((b) => !hidden[b.key]).map((b) => b.key);
-  const solo = withRoute.length > 1 && shownKeys.length === 1 ? shownKeys[0] : null;
   const anyHidden = withRoute.some((b) => hidden[b.key]);
 
   return (
@@ -55,8 +50,7 @@ export default function RouteChips({
               aria-checked={!!shown}
               disabled={!has}
               onClick={() => onToggle(b.key)}
-              onDoubleClick={() => onSolo(b.key)}
-              title={has ? `${shown ? "Hide" : "Show"} ${b.name}. Double-click to see only this route.` : `${b.name}: no route yet`}
+              title={has ? `${shown ? "Hide" : "Show"} ${b.name} on the map` : `${b.name}: no route yet`}
               aria-label={has ? `${b.name} route on the map` : `${b.name}: no route yet`}
               className={`flex items-center gap-1.5 rounded-full py-1 pr-2 pl-2 text-xs font-medium focus-visible:outline-2 focus-visible:outline-zinc-900 disabled:cursor-default ${shown ? "text-zinc-900" : "text-zinc-400"}`}
             >
@@ -64,19 +58,6 @@ export default function RouteChips({
               <span>{b.name}</span>
               <Switch on={!!shown} />
             </button>
-            {has && withRoute.length > 1 && (
-              <button
-                type="button"
-                data-testid={`route-solo-${b.key}`}
-                aria-pressed={solo === b.key}
-                onClick={() => (solo === b.key ? onShowAll() : onSolo(b.key))}
-                aria-label={solo === b.key ? `Show all routes again` : `Show only the ${b.name} route`}
-                title={solo === b.key ? "Show all routes" : "Show only this route"}
-                className={`mr-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-semibold focus-visible:outline-2 focus-visible:outline-zinc-900 ${solo === b.key ? "bg-zinc-900 text-white" : "text-zinc-500 hover:bg-zinc-100"}`}
-              >
-                Only
-              </button>
-            )}
           </div>
         );
       })}
