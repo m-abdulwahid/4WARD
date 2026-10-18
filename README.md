@@ -1,71 +1,174 @@
 # 4WARD
 
-Type a Toronto trip in plain language. Four Playwright bots, each driven by Gemini and each chasing a different
-objective, operate our own map dashboard in parallel and each build a route. You see all four side by side and pick one.
+**Four AI agents plan your Toronto and GTA trip in parallel, each chasing a different goal**
 
-| Bot (shown as) | Internal key | Goal |
-|---|---|---|
-| Economic | `cheap` | Lowest total cost: fares with Presto rules, parking, gas, bike fees |
-| Efficient | `fastest` | Shortest door to door time |
-| Environmental | `green` | Lowest kg CO2e |
-| Reliable | `reliable` | Highest chance of arriving by the deadline (Tiger Data delay history) |
+Multi-agent browser automation, real multi-agency transit routing, and reliability scoring from Tiger Data
 
-Internal keys are used by the backend, the bots and every `data-testid` (`bot-cheap`, `choose-fastest`, ...). Only the
-display names changed; never rename the keys.
+---
 
-## Run it
+## Overview
 
-```powershell
-# one-time
-python -m venv .venv ; .venv\Scripts\pip install -r requirements.txt
-.venv\Scripts\python -m playwright install chromium
-cd dashboard ; npm install ; cd ..
-copy .env.example .env      # then add keys (all optional, see below)
+Most map apps give you one answer. Getting across the GTA means juggling cost, time, bags, and whether you'll make your transfer, and no single route covers all of that.
 
-# every time (starts backend :8000 and dashboard :3000 in the background; logs in data/*.log)
-powershell -File start.ps1          # dev server
-powershell -File start.ps1 -Prod    # production build: faster/steadier, use this for the demo
-```
+That's why we built 4WARD: you describe a trip in plain language, and four AI agents, each running in its own cloud browser, plan it at the same time through our map dashboard. Each agent chases a different goal (cheapest, fastest, greenest, most reliable), so you see the tradeoffs side by side and choose for yourself.
 
-Open http://localhost:3000, click **Plan my trip**. The planner the bots drive is http://localhost:3000/planner.
+4WARD combines a deterministic routing engine, Playwright browser agents on Steel, Gemini function calling, and a TimescaleDB delay history on Tiger Data. Gemini decides what to try. It never decides what the answer is.
 
-CLI (no browser UI): `python -m bots.run --prompt "..." --verbose`. Test: `pytest`. Full dry run: `python -m bots.e2e`.
+## Links
 
-## Keys (`.env`)
+- Try it here: [https://dashboard-sigma-nine-25.vercel.app/] 
+- Devpost: [https://devpost.com/software/4ward-ajlg51]
 
-| Variable | Without it |
+## Features
+
+- Four parallel agents: **Economic**, **Efficient**, **Environmental**, and **Most reliable**
+- Every agent runs in its own isolated Steel cloud browser, and you can watch each one work live
+- Real multi-agency transit routing over one graph built from TTC, GO Transit, York Region Transit, Durham Region Transit, and MiWay GTFS feeds (490 directional lines)
+- Presto vs cash fares, including the 2 hour transfer window, with GO's distance-based fare kept separate from TTC's flat fare
+- Driving and park and ride: gas or EV cost, estimated parking cost, and a search over real nearby subway and GO stations
+- Constraint filter for bags, no Presto card, EV, and bike or e-bike ownership
+- Pareto badge on routes that nothing beats on time, cost, CO2, transfers, and walking all at once
+- Reliability from stored TTC delay history in Tiger Data (TimescaleDB), with confidence that grows as history builds
+- Live TomTom road conditions adjust road legs (live only, not stored)
+- Interactive map with a toggle per route, mode-colored legs, and a step-by-step timeline
+- "Watch the trip unfold": a synced timelapse of all four routes departing together
+- Offline replay mode with cached routing and a SQLite fallback
+
+## Architecture
+
+### Trip Planning Pipeline
+
+Trip in Plain Language → Gemini Constraint Parsing → 4 Parallel Agents (Steel + Playwright) → Routing Engine → Reconciler Picks Each Agent's Winner → Dashboard
+
+### Routing Engine
+
+GTFS Graph (5 agencies) → Dijkstra Search → OSRM Walk/Bike/Drive Legs → Fares → Emissions → Parking and Driving Cost → Constraint Filter → Pareto Marking
+
+Every number the engine returns (time, fare, emissions, reliability) comes from deterministic code, never from an LLM.
+
+### Reliability and Data
+
+TTC Delay Collector → Tiger Data Hypertable → Continuous Aggregate (route, stop, hour, day of week) → Reliability Score → Agent Ranking and On-Time Badge
+
+The Most reliable agent optimizes on-time probability directly from this history. Other agents use it as a weighted signal, and its influence ramps up as matching history builds, capped at two weeks.
+
+### Agent Orchestration
+
+Parsed Constraints → Spawn 4 Steel Sessions → Each Agent Operates the Dashboard (Gemini function calling) → Engine Returns Candidates → Shared Reconciler Ranks per Objective → Results Stream to the UI
+
+## Tech Stack
+
+| Category | Technologies |
 |---|---|
-| `GEMINI_API_KEY` | Bots use a deterministic rule-based brain (same actions, same UI). Set it and each bot is driven by Gemini; any bad/failed Gemini step falls back to the rule brain for that step, so a bot never dies on a model error. `GEMINI_MODEL` defaults to `gemini-2.5-flash`. |
-| `DATABASE_URL` | Local SQLite (`data/4ward.db`) with the same hourly rollups. Set it to your Tiger Data service URL, run `python -m backend.db --init`, then `python -m backend.ingest --seed-sim 48` and charts read the continuous aggregates. |
-| `REPLAY=1` | (backend) never touch the network for routing/bike data: serves cached results from `data/route_cache.json`, `data/gbfs_snapshot.json`. Map tiles still need internet. |
+| AI & Agents | Google Gemini (function calling, trip parsing), Playwright over Chrome DevTools Protocol, Steel cloud browsers |
+| Backend | Python, FastAPI |
+| Frontend | Next.js, React, Tailwind CSS, MapLibre |
+| Database | Tiger Data (PostgreSQL + TimescaleDB), SQLite fallback |
+| Routing & Data | GTFS, GTFS-Realtime, Bike Share Toronto GBFS, OpenStreetMap with OSRM, TomTom Traffic API |
+| Hosting | Vercel, [add backend host] |
 
-## What is real vs estimated
+## How It Works
 
-Shown in the UI and in `backend/config.py` (one file of assumptions).
+1. User types a trip in plain language or clicks an example.
+2. Gemini parses it into structured constraints (origin, destination, bags, deadline, car, Presto status).
+3. The orchestrator opens four Steel cloud browsers, one per agent.
+4. Each agent operates the dashboard like a person would, with Gemini picking the next action.
+5. The routing engine returns real computed candidates for the trip.
+6. A shared deterministic reconciler picks each agent's winner for its own objective.
+7. All four routes appear on one map with time, cost, CO2, transfers, and on-time score.
+8. User toggles routes, picks one, and gets a step-by-step timeline.
+9. "Watch the trip unfold" plays all four routes departing together.
 
-- Real: TTC subway/LRT/streetcar stop sequences and inter-stop times (GTFS static), street walk/bike/drive legs and
-  distances (OpenStreetMap routing), Bike Share Toronto availability (GBFS), TTC trip/alert feeds (GTFS-RT) for history.
-- Estimated (labelled): fares and prices (verify before demo), transit headways, bus legs (no stop-level routing),
-  traffic (typical hour-of-day multiplier, not live), parking cost and spot probability, rideshare fare, emissions factors.
-- Simulated (labelled): `--seed-sim` backfills history so charts are populated; the chart footer says how many samples are simulated.
+## Getting Started
 
-## Layout
+### Prerequisites
 
+- Python 3.11+
+- Node.js 20+
+- API keys and services (see Environment Variables below):
+  - Steel: cloud browser sessions for the agents
+  - Google Gemini: trip parsing and agent actions
+  - Tiger Data: Postgres with TimescaleDB for delay history
+  - TomTom (optional): live road conditions
+
+### Setup
+
+```bash
+# 1. Clone the repository
+git clone [repo url]
+cd 4ward
+
+# 2. Backend
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+cp .env.example .env             # then fill in your keys (see below)
+python -m backend.db --init      # creates tables, policies, and the aggregate
+python -m uvicorn backend.main:app --reload
+
+# 3. Frontend (new terminal)
+cd dashboard
+npm install
+npm run dev
+
+# 4. Data collectors (new terminal)
+# [add the exact collector command from the repo]
+
+# 5. Open the dashboard URL printed by npm run dev
 ```
-backend/   FastAPI: /route, /run (+ /ws/run/{id}), /insights/*, fares, transit router, OSM legs, db, ingest
-bots/      Playwright runner, Gemini + rule brains, profiles/scoring, prompt parser, orchestrator, e2e
-dashboard/ Next.js: / (prompt + 2x2 live bots + shared map + comparison + Tiger Data charts), /planner (what bots operate)
-db/        schema.sql (hypertables + continuous aggregates for Tiger Data)
-data/      transit_network.json (GTFS-derived), timetable.json (real TTC and GO scheduled departures, rebuild with
-           `python -m backend.build_timetable` after refreshing the GTFS folders), highways.json (OSM controlled-access highways and exits, rebuild with
-           `python -m backend.build_highways`), route/geocode caches, replay snapshot
-tests/     fares (hand-checked), scoring, prompt parsing, brain fallback
+
+Check each command against the repo if a path or name differs.
+
+### Environment Variables
+
+The backend reads from `.env` in the project root. Copy the example and fill in your keys:
+
+| Variable | Required | Description |
+|---|---|---|
+| `DATABASE_URL` | Yes | Tiger Data (Postgres) connection string |
+| `STEEL_API_KEY` | Yes, for cloud agents | Steel cloud browser sessions |
+| `GEMINI_API_KEY` | Yes | Gemini API for trip parsing and agent actions |
+| `TOMTOM_API_KEY` | No | Live traffic readings |
+| `BROWSER_BACKEND` | No | `steel` for cloud browsers, `local` for a local Playwright browser |
+| `REPLAY` | No | `1` for offline replay mode with the SQLite fallback |
+
+Steel's cloud browsers cannot reach `localhost`. To run the agents on Steel, the dashboard and backend need public URLs (deploy or use a tunnel). Use `BROWSER_BACKEND=local` for local development.
+
+Never commit `.env`. Keep only placeholder values in `.env.example`.
+
+### Tests
+
+```bash
+pytest
 ```
 
-## Morning checklist
+## Known Limits
 
-1. Add `GEMINI_API_KEY` to `.env`, restart (`start.ps1 -Prod`), run `python -m bots.run --prompt "..." --verbose` and
-   check each result says `brain=gemini` and `gemini_calls` is small (2-3 per bot).
-2. Create the Tiger Data service, put its URL in `DATABASE_URL`, `python -m backend.db --init`,
-   `python -m backend.ingest --seed-sim 48 --once`, reload the dashboard: the chart footer should say "Tiger Data continuous aggregates".
-3. Verify fare constants in `backend/config.py` against ttc.ca / Bike Share Toronto.
+- **Delay history is short.** We started collecting during the hackathon weekend. The earliest hours were backfilled with simulated data and labelled as simulated in the app.
+- **Some numbers are estimates.** Rideshare has no public fare API, and parking cost and availability are estimated. Anything estimated is labelled in the UI.
+- **TomTom data is live only.** We could not confirm that TomTom's terms allow storing results, so we don't store them.
+- **Coverage.** Toronto, Durham, York, Peel, and Halton. Brampton Transit has no public GTFS feed we could find, so those trips get a labelled estimate.
+- Fares and times are for planning. Check the operator before you travel.
+
+## Future Roadmap
+
+- Stop-level bus routing for every agency, including a Brampton Transit feed
+- User-set priority weighting without a hidden blended score
+- More delay history to replace the early simulated data, and road-speed history if TomTom allows storage
+- More cities across Ontario and Canada, since most publish GTFS and GBFS
+- Smarter agents with a multi-step search loop to refine routes
+
+## Team
+
+| Member |
+|---|
+| Iman Panjwani |
+| Mahek Abdul-Wahid |
+| Jeffrey Wong |
+
+## Acknowledgements
+
+Transit schedule data from TTC, GO Transit (Metrolinx), York Region Transit, Durham Region Transit, and MiWay via their public GTFS feeds. Bike Share Toronto GBFS feed. Map data from OpenStreetMap contributors. Traffic readings from TomTom. Built with Steel, Gemini, and Tiger Data. Check each provider's licence and attribution requirements before publishing.
+
+
+<img width="1536" height="1024" alt="Designer (1)" src="https://github.com/user-attachments/assets/c9a8926e-70a0-4bb8-a36e-030290944280" />
