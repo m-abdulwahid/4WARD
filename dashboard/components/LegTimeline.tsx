@@ -43,6 +43,11 @@ function StopRow({ v }: { v: StopVisit }) {
         <span className="font-semibold">{v.name}</span>
         {v.kind !== "origin" && v.kind !== "destination" && v.kind !== "stop" ? <span className="text-zinc-500"> ({v.kind})</span> : null}
         <span className="block text-zinc-500">{v.kind === "origin" ? `start, leave ${v.depart}` : parts.join(" · ")}</span>
+        {(v.traveler || v.car) && (
+          <span className="block text-[11px] text-zinc-500" data-testid={`stop-state-${v.label}`}>
+            {[v.traveler ? `you: ${v.traveler.replace("_", " ")}` : null, v.car && v.car !== "no car" ? `car: ${v.car}` : null].filter(Boolean).join(" · ")}
+          </span>
+        )}
       </span>
     </li>
   );

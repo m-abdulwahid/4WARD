@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
-import { API, Candidate, TripPoint, apiHeaders, runWebSocketUrl } from "@/lib/api";
+import { API, Candidate, Clarification, ClarifyOption, TripPoint, apiHeaders, runWebSocketUrl } from "@/lib/api";
 import { BOTS, BotKey, BotState, blankBots, groupByRoute } from "@/lib/bots";
 import InsightsPanel from "@/components/InsightsPanel";
 import LivePanel from "@/components/LivePanel";
@@ -121,6 +121,8 @@ export default function Home() {
   const [bots, setBots] = useState<Record<BotKey, BotState>>(blankBots);
   const [running, setRunning] = useState(false);
   const [parsed, setParsed] = useState<{ origin: string; destination: string; stops?: { name: string; type: string; dwell_min: number }[]; optimize_order?: boolean; parser?: string; constraints?: Record<string, unknown> } | null>(null);
+  const [clarify, setClarify] = useState<Clarification[]>([]); // questions asked instead of guessing an ambiguous phrase
+  const runTextRef = useRef("");
   const [points, setPoints] = useState<TripPoint[]>([]); // A, B, C ... in visiting order, from the run's first event
   const [error, setError] = useState("");
   const [focus, setFocus] = useState<BotKey | null>(null);
@@ -223,6 +225,13 @@ export default function Home() {
     return () => window.removeEventListener("keydown", onKey);
   }, [drawer, setHidden]);
 
+  const answerClarify = (o: ClarifyOption) => {
+    const text = runTextRef.current;
+    const next = o.replace ? text.replace(o.replace[0], o.replace[1]) : o.append ? `${text.trim()} ${o.append}` : text;
+    setPrompt(next);
+    start(next);
+  };
+
   const patch = useCallback((k: BotKey, p: Partial<BotState>) => setBots((b) => ({ ...b, [k]: { ...b[k], ...p } })), []);
 
   const start = useCallback(async (text: string = prompt) => {
@@ -232,6 +241,8 @@ export default function Home() {
     setFocus(null);
     setParsed(null);
     setPoints([]);
+    setClarify([]);
+    runTextRef.current = text;
     setPlaces(null);
     setUnseen(0);
     setShowAll(false);
@@ -287,6 +298,7 @@ export default function Home() {
         else if (ev.type === "invariant_violation") setEngineIssues(ev.violations ?? []);
         else if (ev.type === "run_done") {
           setEngineIssues(ev.result?.invariant_violations ?? []);
+          setClarify(ev.result?.clarify ?? []);
           setRunning(false);
           runIdRef.current = null;
           if (ev.status === "cancelled") {
@@ -750,6 +762,38 @@ export default function Home() {
         {/* ROUTES tab */}
         <div id="panel-routes" role="tabpanel" aria-labelledby="tab-routes" hidden={tab !== "routes"} className="flex min-h-0 flex-1 flex-col">
           <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 pb-3 md:px-5">
+            {clarify.length > 0 && !running && (
+              <div data-testid="clarify" role="group" aria-label="A question about your trip" className="rounded-xl bg-amber-50 p-3 text-sm text-amber-950 ring-1 ring-amber-200">
+                <p className="text-[11px] font-semibold tracking-wide uppercase">One question before the bots start</p>
+                {clarify.slice(0, 1).map((q) => (
+                  <div key={q.id} className="mt-1">
+                    <p>{q.question}</p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {q.options.map((o, i) => (
+                        <button
+                          key={o.label}
+                          type="button"
+                          data-testid={`clarify-${q.id}-${i}`}
+                          onClick={() => answerClarify(o)}
+                          className="rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-zinc-900 ring-1 ring-amber-300 hover:bg-amber-100 focus-visible:outline-2 focus-visible:outline-zinc-900"
+                        >
+                          {o.label}
+                        </button>
+                      ))}
+                      <button
+                        type="button"
+                        data-testid="clarify-edit"
+                        onClick={backToPrompt}
+                        className="rounded-full px-3 py-1.5 text-xs font-semibold text-amber-950 underline focus-visible:outline-2 focus-visible:outline-zinc-900"
+                      >
+                        Edit my trip instead
+                      </button>
+                    </div>
+                  </div>
+                ))}
+                {clarify.length > 1 && <p className="mt-2 text-[11px]">{clarify.length - 1} more question(s) after this one.</p>}
+              </div>
+            )}
             {parsed?.origin && parsed.destination && (
               <p className="rounded-xl bg-zinc-50 p-3 text-xs text-zinc-600" data-testid="parsed-summary">
                 Understood ({parsed.parser}): <b className="text-zinc-900">{parsed.origin}</b>

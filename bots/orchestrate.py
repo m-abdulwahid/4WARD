@@ -22,7 +22,8 @@ Emit = Callable[[dict], Awaitable[None] | None]
 TORONTO = ZoneInfo("America/Toronto")
 # The only constraint fields the planner page can express; the shared plan uses exactly these so the engine's
 # candidate set and the page every bot operates are the same computation.
-UI_CONSTRAINTS = ("bags", "no_presto", "has_car", "ev", "has_bike", "has_ebike", "avoid_stairs", "depart_at", "arrive_by")
+UI_CONSTRAINTS = ("bags", "no_presto", "has_car", "ev", "has_bike", "has_ebike", "avoid_stairs", "depart_at", "arrive_by",
+                  "start_in_car", "plan_car_return", "car_needed_after")
 
 
 async def _emit(cb: Emit | None, ev: dict) -> None:
@@ -81,7 +82,8 @@ async def _locate(user: dict) -> tuple[dict | None, str | None]:
         if label.startswith("stop"):
             places["stops"].append({**user["stops"][len(places["stops"])], "lat": g["lat"], "lon": g["lon"]})
         else:
-            places[label] = g
+            typ = user.get(f"{label}_type")  # origin: pickup; destination: dropoff or park
+            places[label] = {**g, "type": typ} if typ else g
     return places, None
 
 
@@ -89,21 +91,24 @@ def trip_points(user: dict, places: dict) -> list[dict]:
     """The ordered stops with their A, B, C... labels (as typed), for map markers and the stop list."""
     seq = [("origin", places["origin"], {})] + [("stop", s, s) for s in places["stops"]] + [("destination", places["destination"], {})]
     return [{"label": trip.LETTERS[i], "name": (user["origin"] if k == "origin" else user["destination"] if k == "destination" else p["name"]),
-             "lat": p["lat"], "lon": p["lon"], "type": k if k != "stop" else p.get("type", "stop"), "dwell_min": p.get("dwell_min", 0)}
+             "lat": p["lat"], "lon": p["lon"], "type": p.get("type") or ("stop" if k == "stop" else k), "dwell_min": p.get("dwell_min", 0)}
             for i, (k, p, _) in enumerate(seq)]
 
 
-async def shared_candidates(user: dict, places: dict) -> list[dict]:
-    """The trip's ONE candidate set: every mode, computed once, ranked by all four bots. With stops it is a set of
-    whole-trip candidates (backend/trip.py) shaped exactly like single-leg ones."""
+async def shared_plan(user: dict, places: dict) -> dict:
+    """The trip's ONE plan: every mode, computed once, ranked by all four bots. With stops, logistics words (dropped off,
+    park at, starting in a car ...) or a car to bring back, it is a set of whole-trip candidates (backend/trip.py)
+    shaped exactly like single-leg ones."""
     c = {k: v for k, v in user["constraints"].items() if k in UI_CONSTRAINTS and v is not None}
     constraints = planner.Constraints(modes=list(ALL_MODES), **c)
     o, d = places["origin"], places["destination"]
-    if places["stops"]:
-        plan = await trip.plan_trip(o, places["stops"], d, constraints, bool(user.get("optimize_order")))
-    else:
-        plan = await planner.plan((o["lat"], o["lon"]), (d["lat"], d["lon"]), constraints)
-    return plan["candidates"]
+    if places["stops"] or o.get("type") or d.get("type") or constraints.start_in_car or constraints.car_needed_after:
+        return await trip.plan_trip(o, places["stops"], d, constraints, bool(user.get("optimize_order")))
+    return await planner.plan((o["lat"], o["lon"]), (d["lat"], d["lon"]), constraints)
+
+
+async def shared_candidates(user: dict, places: dict) -> list[dict]:
+    return (await shared_plan(user, places))["candidates"]
 
 
 def _summary(c: dict) -> dict:
@@ -119,17 +124,23 @@ async def run_all(prompt: str, emit: Emit | None = None, base_url: str | None = 
     await _emit(emit, {"type": "parsed", **user})
     if not user["origin"] or not user["destination"]:
         return {"error": "Could not find an origin and destination in the prompt.", "parsed": user, "results": []}
+    if user.get("clarifications"):  # ambiguous words: ask, never guess. The run starts once the user has answered.
+        return {"clarify": user["clarifications"], "parsed": user, "results": []}
     places, scope_error = await _locate(user)
     if scope_error:
         return {"error": scope_error, "parsed": user, "results": []}
-    await _emit(emit, {"type": "points", "points": trip_points(user, places)})
     # Pin the departure to one clock time so the engine's run and every bot's page compute identical times.
     if not user["constraints"].get("depart_at"):
         user["constraints"]["depart_at"] = datetime.now(TORONTO).strftime("%H:%M")
     try:
-        shared = await shared_candidates(user, places)
+        plan = await shared_plan(user, places)
+        shared = plan["candidates"]
+    except trip.TripImpossible as e:  # a logistics rule makes the trip as described impossible: say which
+        return {"error": str(e), "parsed": user, "results": []}
     except Exception as e:  # engine failure: say so rather than starting four bots that would hit the same failure
         return {"error": f"The routing engine failed: {type(e).__name__}: {str(e)[:160]}", "parsed": user, "results": []}
+    points = plan.get("points") or trip_points(user, places)
+    await _emit(emit, {"type": "points", "points": points})
     keys = keys or list(PROFILES)
     await _warm_up(base_url)
     backend = os.environ.get("BROWSER_BACKEND", "local").lower()
@@ -150,5 +161,5 @@ async def run_all(prompt: str, emit: Emit | None = None, base_url: str | None = 
         await _emit(emit, {"type": "invariant_violation", "violations": violations})
     _, relaxed = optimize.eligible(shared, user["constraints"])
     return {"parsed": user, "results": results, "elapsed_s": round(time.time() - t0, 1),
-            "points": trip_points(user, places), "candidates": [_summary(c) for c in shared], "relaxed": relaxed,
+            "points": points, "candidates": [_summary(c) for c in shared], "relaxed": relaxed,
             "invariant_violations": violations, "route_tags": optimize.tags(chosen)}

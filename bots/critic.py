@@ -18,6 +18,14 @@ def flags_for(route: dict | None, constraints: dict) -> list[str]:
     for v in route.get("violates") or []:
         if v == "max_walk":
             out.append(f"Walking {route.get('walk_m')} m exceeds your limit")
+        elif v.startswith("highway_walk:"):
+            out.append(f"Walks or cycles along {v.split(':', 1)[1]}, a controlled-access highway")
+        elif v == "car_left_behind":
+            out.append("Leaves your car behind, but you said you will need it later")
+        elif v == "teleport":
+            out.append("The legs of this route do not connect to each other")
+        elif v.startswith("window:"):
+            out.append(f"Misses the time you must be at {v.split(':', 1)[1]}")
         else:
             out.append(f"Violates constraint: {v}")
     bags = constraints.get("bags", 0)

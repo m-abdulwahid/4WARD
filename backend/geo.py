@@ -60,6 +60,10 @@ GAZETTEER = {
     "newmarket go": (44.060426, -79.459289),
     "aurora go": (44.000758, -79.459725),
     "rogers centre": (43.6414, -79.3894),
+    # Points ON controlled-access highways (vertices of the OSM ways in data/highways.json): for "I'm in my car on the DVP"
+    "don valley parkway": (43.69024, -79.35989),
+    "dvp": (43.69024, -79.35989),
+    "gardiner expressway": (43.63823, -79.39536),
 }
 
 

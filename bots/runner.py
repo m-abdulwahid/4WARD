@@ -115,7 +115,12 @@ async def run_bot(ctx: BrowserContext, key: str, user: dict, base_url: str, emit
                 elif action["action"] == "click":
                     await loc.click(timeout=5000)
                 else:
-                    await page.wait_for_timeout(500)
+                    # Waiting on a slow route computation (trips with stops can take a while): block until it ends,
+                    # bounded, rather than spending one of the step cap's steps every half second.
+                    try:
+                        await page.wait_for_function("!window.__4ward || window.__4ward.state !== 'loading'", timeout=30000)
+                    except Exception:
+                        pass
                 if action["action"] != "wait":
                     await page.wait_for_function("!window.__4ward || window.__4ward.state !== 'loading'", timeout=45000)
                     await page.wait_for_timeout(120)

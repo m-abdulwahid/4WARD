@@ -40,10 +40,19 @@ export type StopVisit = {
   dwell_min: number;
   depart: string | null;
   window?: [string, string] | null;
+  arrived_as?: string | null; // how you got here: on_foot | cycling | driving | passenger | on_transit
+  traveler?: string; // your state after the stop
+  car?: string; // where your car is: "parked at X", "you are in it", "no car"
 };
 
-export type StopType = "stop" | "via" | "pickup" | "dropoff" | "errand";
-export type StopInput = { name: string; type: StopType; dwell_min: number };
+/** A question the app asks instead of guessing an ambiguous phrase. */
+export type ClarifyOption = { label: string; replace?: [string, string]; append?: string };
+export type Clarification = { id: string; question: string; options: ClarifyOption[]; place?: string };
+
+export type StopType = "stop" | "via" | "pickup" | "dropoff" | "errand" | "park" | "alight";
+export type StopVehicle = "bus" | "subway" | "streetcar" | "train" | "transit";
+export type StopInput = { name: string; type: StopType; dwell_min: number; window_start?: string; window_end?: string; vehicle?: StopVehicle };
+export type EndType = "pickup" | "dropoff" | "park" | null;
 
 export type Candidate = {
   id: string;
@@ -94,6 +103,9 @@ export type Constraints = {
   avoid_stairs: boolean;
   max_walk_m?: number | null;
   stay_hours?: number | null;
+  start_in_car?: boolean;
+  plan_car_return?: boolean;
+  car_needed_after?: boolean;
 };
 
 export const ALL_MODES = ["walk", "bike", "ebike", "bikeshare", "drive", "rideshare", "transit", "park_ride"] as const;
@@ -104,14 +116,22 @@ export async function computeRoute(
   constraints: Constraints,
   stops: StopInput[] = [],
   optimizeOrder = false,
+  originType: EndType = null,
+  destinationType: EndType = null,
 ): Promise<RouteResult> {
   const r = await fetch(`${API}/route`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      origin: { text: origin },
-      destination: { text: destination },
-      stops: stops.filter((s) => s.name.trim()).map((s) => ({ name: s.name.trim(), type: s.type, dwell_min: s.dwell_min })),
+      origin: { text: origin, type: originType },
+      destination: { text: destination, type: destinationType },
+      stops: stops.filter((s) => s.name.trim()).map((s) => ({
+        name: s.name.trim(),
+        type: s.type,
+        dwell_min: s.dwell_min,
+        window: s.window_start && s.window_end ? [s.window_start, s.window_end] : null,
+        vehicle: s.type === "alight" ? s.vehicle ?? "transit" : null,
+      })),
       optimize_order: optimizeOrder,
       constraints,
     }),

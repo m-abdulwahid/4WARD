@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
-import { ALL_MODES, Candidate, Constraints, RouteResult, StopInput, StopType, computeRoute, getAssumptions, suggest } from "@/lib/api";
+import { ALL_MODES, Candidate, Constraints, EndType, RouteResult, StopInput, StopType, computeRoute, getAssumptions, suggest } from "@/lib/api";
 
 const RouteMap = dynamic(() => import("@/components/RouteMap"), { ssr: false });
 
@@ -33,7 +33,17 @@ const STOP_TYPES: [StopType, string][] = [
   ["pickup", "Pick up"],
   ["dropoff", "Drop off"],
   ["errand", "Errand"],
+  ["park", "Park my car here"],
+  ["alight", "Get off transit here"],
 ];
+const VEHICLES = ["transit", "bus", "subway", "streetcar", "train"] as const;
+const END_TYPES: Record<"origin" | "destination", [Exclude<EndType, null>, string][]> = {
+  origin: [["pickup", "A ride picks me up here"]],
+  destination: [
+    ["dropoff", "I am dropped off here"],
+    ["park", "I park my car here"],
+  ],
+};
 const LETTERS = "ABCDEFGHIJ";
 const TOGGLES: [keyof Constraints, string][] = [
   ["no_presto", "No Presto card"],
@@ -42,6 +52,9 @@ const TOGGLES: [keyof Constraints, string][] = [
   ["has_bike", "I have a bike"],
   ["has_ebike", "I have an e-bike"],
   ["avoid_stairs", "Avoid stairs"],
+  ["start_in_car", "I start in my car"],
+  ["car_needed_after", "I need my car after"],
+  ["plan_car_return", "Plan the way back to my car"],
 ];
 
 declare global {
@@ -53,6 +66,25 @@ declare global {
 /** Stable, reversible id for a lot name so bots (and tests) can target a specific button. */
 function lotSlug(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+}
+
+function EndTypes({ side, value, onChange }: { side: "origin" | "destination"; value: EndType; onChange: (v: EndType) => void }) {
+  return (
+    <div className="-mt-1 flex flex-wrap gap-1.5">
+      {END_TYPES[side].map(([t, label]) => (
+        <button
+          key={t}
+          type="button"
+          data-testid={`${side}-type-${t}`}
+          aria-pressed={value === t}
+          onClick={() => onChange(value === t ? null : t)}
+          className={`rounded-full border px-2.5 py-0.5 text-xs ${value === t ? "border-zinc-900 bg-zinc-900 text-white" : "border-zinc-200 bg-white text-zinc-700"}`}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
 }
 
 function Place({ id, label, value, onChange }: { id: string; label: string; value: string; onChange: (v: string) => void }) {
@@ -126,6 +158,8 @@ export default function Planner() {
   });
   const [stops, setStops] = useState<StopInput[]>([]);
   const [optimizeOrder, setOptimizeOrder] = useState(false);
+  const [originType, setOriginType] = useState<EndType>(null);
+  const [destinationType, setDestinationType] = useState<EndType>(null);
   const [lots, setLots] = useState<string[]>([]);
   const updateStop = (i: number, patch: Partial<StopInput>) => setStops((s) => s.map((x, j) => (j === i ? { ...x, ...patch } : x)));
   const moveStop = (i: number, by: number) =>
@@ -155,23 +189,26 @@ export default function Planner() {
         ...c,
         depart_at: c.depart_at || null,
         arrive_by: c.arrive_by || null,
-      }, stops, optimizeOrder);
+      }, stops, optimizeOrder, originType, destinationType);
       setResult(r);
       setState("done");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setState("error");
     }
-  }, [origin, destination, c, stops, optimizeOrder]);
+  }, [origin, destination, c, stops, optimizeOrder, originType, destinationType]);
 
   useEffect(() => {
-    window.__4ward = { state, error, origin, destination, stops, selected, confirmed, candidates: result?.candidates ?? [] };
-  }, [state, error, origin, destination, stops, selected, confirmed, result]);
+    window.__4ward = { state, error, origin, destination, originType, destinationType, stops, selected, confirmed, candidates: result?.candidates ?? [] };
+  }, [state, error, origin, destination, originType, destinationType, stops, selected, confirmed, result]);
 
+  // A trip with stops can have dozens of options; drawing every one makes the map crawl (a bot's headless browser
+  // most of all), so with many options only the selected one is drawn.
   const mapRoutes = useMemo(
     () =>
       (result?.candidates ?? [])
         .filter((x) => x.available && x.legs.length)
+        .filter((x, _i, all) => all.length <= 8 || x.id === selected)
         .map((x) => ({
           id: x.id,
           color: COLORS[x.id] ?? "#2563eb",
@@ -194,6 +231,7 @@ export default function Planner() {
           </p>
         )}
         <Place id="origin" label="From (A)" value={origin} onChange={setOrigin} />
+        <EndTypes side="origin" value={originType} onChange={setOriginType} />
         <section aria-label="Stops" className="flex flex-col gap-2" data-testid="stops">
           {stops.map((s, i) => (
             <div key={i} className="rounded-xl border border-zinc-200 p-2" data-testid={`stop-${i}`}>
@@ -212,6 +250,14 @@ export default function Planner() {
                     className="w-16 rounded-lg border border-zinc-200 px-2 py-1 disabled:opacity-50"
                   />
                 </label>
+                <label className="flex items-center gap-1">
+                  Meet from
+                  <input data-testid={`stop-${i}-window-start`} value={s.window_start ?? ""} placeholder="HH:MM" onChange={(e) => updateStop(i, { window_start: e.target.value })} className="w-16 rounded-lg border border-zinc-200 px-2 py-1" />
+                </label>
+                <label className="flex items-center gap-1">
+                  to
+                  <input data-testid={`stop-${i}-window-end`} value={s.window_end ?? ""} placeholder="HH:MM" onChange={(e) => updateStop(i, { window_end: e.target.value })} className="w-16 rounded-lg border border-zinc-200 px-2 py-1" />
+                </label>
                 {STOP_TYPES.map(([t, label]) => (
                   <button
                     key={t}
@@ -224,6 +270,19 @@ export default function Planner() {
                     {label}
                   </button>
                 ))}
+                {s.type === "alight" &&
+                  VEHICLES.map((v) => (
+                    <button
+                      key={v}
+                      type="button"
+                      data-testid={`stop-${i}-vehicle-${v}`}
+                      aria-pressed={(s.vehicle ?? "transit") === v}
+                      onClick={() => updateStop(i, { vehicle: v })}
+                      className={`rounded-full border px-2 py-0.5 ${(s.vehicle ?? "transit") === v ? "border-sky-800 bg-sky-800 text-white" : "border-zinc-200 bg-white text-zinc-700"}`}
+                    >
+                      {v}
+                    </button>
+                  ))}
                 <span className="ml-auto flex gap-1">
                   <button type="button" data-testid={`stop-${i}-up`} aria-label={`Move stop ${LETTERS[i + 1]} earlier`} disabled={i === 0} onClick={() => moveStop(i, -1)} className="rounded border border-zinc-200 px-1.5 disabled:opacity-40">↑</button>
                   <button type="button" data-testid={`stop-${i}-down`} aria-label={`Move stop ${LETTERS[i + 1]} later`} disabled={i === stops.length - 1} onClick={() => moveStop(i, 1)} className="rounded border border-zinc-200 px-1.5 disabled:opacity-40">↓</button>
@@ -257,6 +316,7 @@ export default function Planner() {
           </div>
         </section>
         <Place id="destination" label={`To (${LETTERS[stops.length + 1]})`} value={destination} onChange={setDestination} />
+        <EndTypes side="destination" value={destinationType} onChange={setDestinationType} />
 
         <fieldset>
           <legend className="text-xs font-medium text-zinc-600">Travel modes to consider</legend>
@@ -431,6 +491,8 @@ export default function Planner() {
                           {v.wait_min > 0 ? `, wait ${Math.round(v.wait_min)} min` : ""}
                           {v.dwell_min > 0 ? `, stay ${Math.round(v.dwell_min)} min` : ""}
                           {v.depart ? `, leave ${v.depart}` : ""}
+                          {v.traveler ? ` · ${v.traveler.replace("_", " ")}` : ""}
+                          {v.car ? ` · car: ${v.car}` : ""}
                         </li>
                       ))}
                     </ol>
@@ -457,6 +519,9 @@ export default function Planner() {
           >
             Confirm this route
           </button>
+        )}
+        {result && result.candidates.filter((x) => x.available).length > 8 && !selected && (
+          <p className="text-xs text-zinc-500" data-testid="map-hint">Select a route to see it on the map ({result.candidates.length} options).</p>
         )}
         {result && <p className="text-xs text-zinc-500">{result.data_notes.join(" · ")}</p>}
       </aside>

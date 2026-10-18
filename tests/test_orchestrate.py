@@ -17,7 +17,7 @@ async def _run(monkeypatch, shared, bot_routes, keys=None):
         return {"origin": {"lat": 43.7, "lon": -79.4}, "destination": {"lat": 43.65, "lon": -79.38}, "stops": []}, None
 
     async def fake_shared(*_):
-        return shared
+        return {"candidates": shared, "points": []}
 
     async def fake_local(keys, user, base_url, emit, max_steps, timeout_s, stream_frames, shared_set):
         assert shared_set is shared  # every bot receives the SAME candidate set object
@@ -29,7 +29,7 @@ async def _run(monkeypatch, shared, bot_routes, keys=None):
 
     monkeypatch.setattr(orchestrate, "parse_prompt", parse)
     monkeypatch.setattr(orchestrate, "_locate", locate)
-    monkeypatch.setattr(orchestrate, "shared_candidates", fake_shared)
+    monkeypatch.setattr(orchestrate, "shared_plan", fake_shared)
     monkeypatch.setattr(orchestrate, "_run_local", fake_local)
     monkeypatch.setattr(orchestrate, "_warm_up", no_warm)
     monkeypatch.setenv("BROWSER_BACKEND", "local")
@@ -64,3 +64,70 @@ async def test_failed_bot_does_not_hide_the_others_or_trip_the_check(monkeypatch
     out, _ = await _run(monkeypatch, [fast, cheap], got)
     assert len(out["results"]) == 4 and out["results"][3]["status"] == "FAILED"
     assert out["invariant_violations"] == []
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_words_stop_the_run_and_ask_instead_of_starting_bots(monkeypatch):
+    async def parse(_):
+        return {"origin": "A", "destination": "B", "stops": [], "constraints": {}, "parser": "rules",
+                "clarifications": [{"id": "get-off", "question": "Bus or car?", "options": []}]}
+
+    async def boom(*_a, **_k):
+        raise AssertionError("no bot may start while a question is open")
+
+    monkeypatch.setattr(orchestrate, "parse_prompt", parse)
+    monkeypatch.setattr(orchestrate, "_run_local", boom)
+    monkeypatch.setattr(orchestrate, "_locate", boom)
+    out = await orchestrate.run_all("x", None, stream_frames=False)
+    assert out["clarify"][0]["id"] == "get-off" and out["results"] == [] and "error" not in out
+
+
+@pytest.mark.asyncio
+async def test_an_impossible_trip_is_reported_with_the_reason(monkeypatch):
+    from backend import trip
+
+    async def impossible(*_a):
+        raise trip.TripImpossible("You said to park somewhere, but you have not said you have a car")
+
+    async def parse(_):
+        return {"origin": "A", "destination": "B", "constraints": {}, "parser": "rules"}
+
+    async def locate(_):
+        return {"origin": {"lat": 43.7, "lon": -79.4}, "destination": {"lat": 43.65, "lon": -79.38}, "stops": []}, None
+
+    monkeypatch.setattr(orchestrate, "parse_prompt", parse)
+    monkeypatch.setattr(orchestrate, "_locate", locate)
+    monkeypatch.setattr(orchestrate, "shared_plan", impossible)
+    out = await orchestrate.run_all("x", None, stream_frames=False)
+    assert "have a car" in out["error"] and out["results"] == []
+
+
+@pytest.mark.asyncio
+async def test_logistics_words_reach_the_planner_as_typed_endpoints(monkeypatch):
+    seen = {}
+
+    async def fake_plan_trip(o, stops, d, constraints, optimize):
+        seen.update(o=o, d=d, c=constraints)
+        return {"candidates": [], "points": []}
+
+    monkeypatch.setattr(orchestrate.trip, "plan_trip", fake_plan_trip)
+    user = {"origin": "A", "destination": "B", "origin_type": "pickup", "destination_type": "dropoff", "stops": [],
+            "constraints": {"start_in_car": True, "car_needed_after": True, "plan_car_return": True}}
+    places = {"origin": {"lat": 1, "lon": 2}, "destination": {"lat": 3, "lon": 4}, "stops": []}
+    await orchestrate.shared_plan(user, {"origin": {**places["origin"], "type": "pickup"}, "destination": {**places["destination"], "type": "dropoff"}, "stops": []})
+    assert seen["o"]["type"] == "pickup" and seen["d"]["type"] == "dropoff"
+    assert seen["c"].start_in_car and seen["c"].has_car and seen["c"].plan_car_return and seen["c"].car_needed_after
+
+@pytest.mark.asyncio
+async def test_locate_keeps_the_pickup_dropoff_types_and_the_stop_details(monkeypatch):
+    async def geocode(q):
+        return {"name": q, "lat": 43.65, "lon": -79.38}
+
+    monkeypatch.setattr(orchestrate.geo, "geocode", geocode)
+    user = {"origin": "A", "destination": "B", "origin_type": "pickup", "destination_type": "dropoff",
+            "stops": [{"name": "S", "type": "park", "dwell_min": 5.0}]}
+    places, err = await orchestrate._locate(user)
+    assert err is None and places["origin"]["type"] == "pickup" and places["destination"]["type"] == "dropoff"
+    assert places["stops"] == [{"name": "S", "type": "park", "dwell_min": 5.0, "lat": 43.65, "lon": -79.38}]
+    pts = orchestrate.trip_points(user, places)
+    assert [(p["label"], p["type"]) for p in pts] == [("A", "pickup"), ("B", "park"), ("C", "dropoff")]

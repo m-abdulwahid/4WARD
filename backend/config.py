@@ -57,6 +57,9 @@ PARKING_SEARCH_MIN = {"downtown": 8.0, "other": 3.0}
 PARKING_WALK_MIN = {"downtown": 4.0, "other": 2.0}
 PARK_RIDE_LOT_TO_PLATFORM_MIN = 4.0
 
+# "Meet someone at X at 6": arriving early waits; arriving up to this many minutes late is still on time (ASSUMPTION, verify).
+MEET_WINDOW_GRACE_MIN = 5
+
 # Shared eligibility rule for ranking (bots/optimize.py): a route slower than max(MIN_CAP, FACTOR x the fastest
 # route) is not a practical option for ANY bot (stops "free" 12 hour walks winning on cost).
 PRACTICAL_MIN_CAP_MIN = 90

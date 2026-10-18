@@ -160,6 +160,38 @@ def test_rule_brain_removes_surplus_stops_and_sets_the_reorder_flag():
     assert RuleBrain("cheap", user2).next_action(_setup_page(rows), [])["testid"] == "toggle-optimize_order"
 
 
+def test_rule_brain_sets_logistics_controls_exactly_as_the_request_says():
+    user = {"origin": "A", "destination": "D", "origin_type": "pickup", "destination_type": "dropoff", "optimize_order": False,
+            "constraints": {"start_in_car": True, "has_car": True, "car_needed_after": True, "plan_car_return": False},
+            "stops": [{"name": "Union", "type": "stop", "dwell_min": 0, "window": ["18:00", "18:05"]}]}
+    controls = [{"testid": "stop-0-input", "value": "Union"}, {"testid": "stop-0-type-stop", "pressed": "true"}, {"testid": "stop-0-dwell", "value": "0"},
+                {"testid": "stop-0-window-start", "value": ""}, {"testid": "stop-0-window-end", "value": ""},
+                {"testid": "origin-type-pickup", "pressed": "false"}, {"testid": "destination-type-dropoff", "pressed": "false"},
+                {"testid": "destination-type-park", "pressed": "false"},
+                {"testid": "toggle-start_in_car", "pressed": "false"}, {"testid": "toggle-car_needed_after", "pressed": "false"},
+                {"testid": "toggle-plan_car_return", "pressed": "false"}]
+    brain = RuleBrain("cheap", user)
+    page = _setup_page(controls)
+    seen = []
+    for _ in range(12):
+        a = brain.next_action(page, [])
+        if a.get("testid") == "compute-route":
+            break
+        seen.append((a["action"], a["testid"], a.get("text")))
+        for c in page["controls"]:  # apply the action to the fake page like the browser would
+            if c["testid"] == a["testid"]:
+                if a["action"] == "type":
+                    c["value"] = a["text"]
+                else:
+                    c["pressed"] = "false" if c.get("pressed") == "true" else "true"
+    assert ("type", "stop-0-window-start", "18:00") in seen and ("type", "stop-0-window-end", "18:05") in seen
+    assert ("click", "origin-type-pickup", None) in seen and ("click", "destination-type-dropoff", None) in seen
+    for flag in ("start_in_car", "car_needed_after"):
+        assert ("click", f"toggle-{flag}", None) in seen
+    assert not any(t == "toggle-plan_car_return" for _, t, _ in seen)          # not asked for: left off
+    assert not any(t == "destination-type-park" for _, t, _ in seen)
+
+
 def test_critic_flags_deadline_and_walk_and_bags():
     assert critic.flags_for(None, {}) == []
     missed = {"meets_deadline": False, "arrive": "17:42", "violates": [], "bag_friendliness": 1.0}
@@ -171,6 +203,14 @@ def test_critic_flags_deadline_and_walk_and_bags():
     assert critic.flags_for(bag_hostile, {"bags": 0}) == []
     clean = {"meets_deadline": True, "violates": [], "bag_friendliness": 1.0}
     assert critic.flags_for(clean, {"bags": 2, "arrive_by": "17:00"}) == []
+
+
+def test_critic_explains_logistics_violations_in_plain_words():
+    r = {"meets_deadline": True, "bag_friendliness": 1.0,
+         "violates": ["highway_walk:Gardiner Expressway", "car_left_behind", "window:Eaton Centre"]}
+    flags = critic.flags_for(r, {})
+    assert flags == ["Walks or cycles along Gardiner Expressway, a controlled-access highway",
+                     "Leaves your car behind, but you said you will need it later", "Misses the time you must be at Eaton Centre"]
 
 
 def test_critic_apply_prepends_notes_and_sets_violations():

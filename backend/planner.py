@@ -7,15 +7,17 @@ import asyncio
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
-from . import bikeshare, fares, osm, pareto, reliability, transit
+from . import bikeshare, fares, highways, osm, pareto, reliability, transit
 from .config import PARK_RIDE_LOT_TO_PLATFORM_MIN, PARKING_SEARCH_MIN, PARKING_WALK_MIN, SPEEDS_KMH, traffic_multiplier
 from .geo import haversine_km
 
 TORONTO = ZoneInfo("America/Toronto")
 ALL_MODES = ["walk", "bike", "ebike", "bikeshare", "drive", "rideshare", "transit", "park_ride"]
 NEEDS = {"bike": "has_bike", "ebike": "has_ebike", "drive": "has_car", "park_ride": "has_car"}
+LIFT = "lift"  # someone else drives you (dropped off / picked up). Never part of ALL_MODES: only trip.py asks for it, for a leg the user described that way.
+FOOT_MODES = ("walk", "bike", "ebike", "bikeshare")  # legs that must never run along a controlled-access highway
 
 PARK_RIDE_LOTS = [
     ("Finch Station", 43.7807, -79.4148, "subway"), ("Kennedy Station", 43.7323, -79.2637, "subway"),
@@ -68,6 +70,15 @@ class Constraints(BaseModel):
     max_walk_m: int | None = None
     stay_hours: float | None = None
     rides_this_week: int = 0
+    start_in_car: bool = False       # traveler_state at the start is "driving": the first leg is driven
+    plan_car_return: bool = False    # the user answered Yes to "plan the return to your car?"
+    car_needed_after: bool = False   # the user said they will need the car after this trip
+
+    @model_validator(mode="after")
+    def _starting_in_a_car_means_having_one(self):
+        if self.start_in_car:
+            self.has_car = True
+        return self
 
 
 def _hhmm(s: str | None, base: datetime) -> datetime | None:
@@ -126,6 +137,14 @@ def _finish(cand_id: str, title: str, legs: list[dict], c: Constraints, depart: 
         cand["meets_deadline"] = arrive <= ab
         cand["leave_by"] = (ab - timedelta(seconds=dur_s)).strftime("%H:%M")
     cand.update(extra or {})
+    # Hard rule: no walking or cycling leg may run along a controlled-access highway (DVP, Gardiner, 400-series, QEW).
+    for l in legs:
+        if l["mode"] in FOOT_MODES:
+            hw = highways.leg_on_highway(l["geometry"])
+            if hw:
+                cand["violates"] = sorted(set(cand.get("violates", []) + [f"highway_walk:{hw}"]))
+                cand["notes"] = list(cand["notes"]) + [f"Not allowed: this {l['mode']} leg runs along {hw}, a controlled-access highway"]
+                break
     return cand
 
 
@@ -235,7 +254,7 @@ async def plan(origin: tuple[float, float], dest: tuple[float, float], c: Constr
     hour = depart.hour
     tm = traffic_multiplier(hour)
     out: list[dict] = []
-    modes = [m for m in c.modes if m in ALL_MODES]
+    modes = [m for m in c.modes if m in ALL_MODES or m == LIFT]
 
     for m in modes:
         flag = NEEDS.get(m)
@@ -301,6 +320,15 @@ async def plan(origin: tuple[float, float], dest: tuple[float, float], c: Constr
                                 f"Includes about {park_min:.0f} min to find parking and walk (estimate)",
                                 f"Traffic factor x{tm} for {hour:02d}:00 (typical-day estimate, not live)"],
                                extra={"parking_find_probability": prob}))
+
+        elif m == LIFT:
+            g = await osm.leg("drive", origin, dest)
+            dur = g["duration_s"] * tm  # no pickup wait, no parking search: someone you know drives you door to door
+            lg = _leg("car", "Lift from someone else (no fare, no parking for you)", origin, dest, g, 0.0,
+                      fares.emissions_kg("car", g["distance_km"]), dur)
+            out.append(_finish(LIFT, "Lift", [lg], c, depart, hour, 0,
+                               ["Someone else drives you and their car does not continue with you; you pay nothing and no parking",
+                                "CO2 counts the whole car trip (ESTIMATE)", f"Traffic factor x{tm} for {hour:02d}:00 (typical-day estimate, not live)"]))
 
         elif m == "rideshare":
             g = await osm.leg("drive", origin, dest)

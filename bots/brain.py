@@ -19,7 +19,7 @@ from . import optimize
 from .profiles import PROFILES, modes_for
 
 ALL_MODES = ["walk", "bike", "ebike", "bikeshare", "drive", "rideshare", "transit", "park_ride"]
-FLAGS = ["no_presto", "has_car", "ev", "has_bike", "has_ebike", "avoid_stairs"]
+FLAGS = ["no_presto", "has_car", "ev", "has_bike", "has_ebike", "avoid_stairs", "start_in_car", "car_needed_after", "plan_car_return"]
 MAX_GEMINI_CALLS = 3  # setup plans per bot; a trip with many stops may need more than one batch
 
 
@@ -90,10 +90,26 @@ class RuleBrain:
             kind = s.get("type", "stop")
             if (ctl := _control(page, f"stop-{i}-type-{kind}")) is not None and ctl.get("pressed") != "true":
                 return {"action": "click", "testid": f"stop-{i}-type-{kind}", "reason": f"stop {i + 1} is a {kind}"}
+            if kind == "alight":
+                veh = s.get("vehicle") or "transit"
+                vctl = _control(page, f"stop-{i}-vehicle-{veh}")
+                if vctl is not None and vctl.get("pressed") != "true":
+                    return {"action": "click", "testid": f"stop-{i}-vehicle-{veh}", "reason": f"stop {i + 1}: get off the {veh}"}
+            win = s.get("window") or ["", ""]
+            for edge, want_t in (("start", win[0]), ("end", win[1])):
+                wctl = _control(page, f"stop-{i}-window-{edge}")
+                if wctl is not None and (wctl.get("value") or "") != want_t:
+                    return {"action": "type", "testid": f"stop-{i}-window-{edge}", "text": want_t, "reason": f"meeting time window {edge} for stop {i + 1}"}
             dwell = s.get("dwell_min") or 0
             want_dwell = str(int(dwell)) if float(dwell).is_integer() else str(dwell)
             if (ctl := _control(page, f"stop-{i}-dwell")) is not None and kind != "via" and (ctl.get("value") or "0") != want_dwell:
                 return {"action": "type", "testid": f"stop-{i}-dwell", "text": want_dwell, "reason": f"stay {want_dwell} min at stop {i + 1}"}
+        for side in ("origin", "destination"):  # a ride starts here / you are dropped off here / you park here
+            want_kind = self.user.get(f"{side}_type")
+            for kind in ("pickup", "dropoff", "park"):
+                ctl = _control(page, f"{side}-type-{kind}")
+                if ctl is not None and (ctl.get("pressed") == "true") != (want_kind == kind):
+                    return {"action": "click", "testid": f"{side}-type-{kind}", "reason": f"the {side} is {want_kind or kind}: set the {side} logistics"}
         opt = _control(page, "toggle-optimize_order")
         if opt is not None and (opt.get("pressed") == "true") != bool(self.user.get("optimize_order")):
             return {"action": "click", "testid": "toggle-optimize_order", "reason": "set whether the planner may reorder stops"}
@@ -156,6 +172,9 @@ Actions run in order in the browser. Rules:
 - If the request has `stops` (in visiting order, keep that order): click add-stop once per stop, type each name into
   stop-N-input (N from 0), click stop-N-type-<type> for its type, and type its stay in minutes into stop-N-dwell
   (not for via). Never reorder stops yourself; only click toggle-optimize_order when the request says optimize_order is true.
+- The request may also say how you travel: origin_type "pickup" (click origin-type-pickup), destination_type "dropoff" or "park"
+  (click destination-type-<type>), constraints start_in_car / car_needed_after / plan_car_return (click toggle-<name> when true),
+  and per stop a window ["HH:MM","HH:MM"] (type into stop-N-window-start and stop-N-window-end). Set exactly what the request says.
 - Turn ON every travel-mode toggle (mode-toggle-*) that is OFF, and never turn one off. All four bots search the same
   modes so their results are comparable; an action that turns a mode off is rejected, and so is computing while a mode
   or constraint still differs from the user's request.

@@ -12,7 +12,7 @@ def parsed(text):
     ("From Union Station to the CN Tower with a stop at High Park for 30 minutes",
      ("Union Station", [("High Park", "stop", 30.0)], "CN Tower", False)),
     ("Get from York University to Union Station, swing by Eaton Centre for 20 minutes and pick up a friend at Kipling Station",
-     ("York University", [("Eaton Centre", "stop", 20.0), ("Kipling Station", "pickup", 0.0)], "Union Station", False)),
+     ("York University", [("Eaton Centre", "stop", 20.0), ("Kipling Station", "errand", 0.0)], "Union Station", False)),   # YOU pick a friend up: an errand stop (a ride that picks YOU up is "pickup")
     ("Union Station to Kensington Market via High Park",
      ("Union Station", [("High Park", "via", 0.0)], "Kensington Market", False)),
     ("From Kipling Station to Finch Station, then Union Station, then CN Tower",

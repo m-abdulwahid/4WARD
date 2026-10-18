@@ -57,6 +57,7 @@ class Place(BaseModel):
     text: str | None = None
     lat: float | None = None
     lon: float | None = None
+    type: str | None = None  # origin: "pickup" (a ride starts here); destination: "dropoff" or "park"
 
 
 class RouteRequest(BaseModel):
@@ -91,7 +92,7 @@ async def health():
 @app.get("/assumptions")
 async def assumptions():
     return {"assumptions": ASSUMPTIONS, "emissions_g_per_km": EMISSIONS_G_PER_KM, "speeds_kmh": SPEEDS_KMH,
-            "park_ride_lots": [name for name, _lat, _lon in planner.PARK_RIDE_LOTS]}
+            "park_ride_lots": [lot[0] for lot in planner.PARK_RIDE_LOTS]}
 
 
 @app.get("/suggest")
@@ -116,6 +117,10 @@ async def bikeshare_stations():
 @app.post("/route")
 async def route(req: RouteRequest):
     o, d = await resolve(req.origin), await resolve(req.destination)
+    if req.origin.type:
+        o = {**o, "type": req.origin.type}
+    if req.destination.type:
+        d = {**d, "type": req.destination.type}
     resolved = []
     for s in req.stops:
         g = await resolve(Place(text=s.name, lat=s.lat, lon=s.lon))
@@ -123,10 +128,10 @@ async def route(req: RouteRequest):
     for n, p in [("origin", o), ("destination", d)] + [(f"stop '{s['name']}'", s) for s in resolved]:
         if not geo.in_gta(p["lat"], p["lon"]):
             raise HTTPException(422, f"{n} is outside the GTA")
-    if resolved:
+    if resolved or o.get("type") or d.get("type") or req.constraints.start_in_car or req.constraints.car_needed_after:
         try:
             result = await trip.plan_trip(o, resolved, d, req.constraints, req.optimize_order)
-        except ValueError as e:
+        except ValueError as e:  # includes trip.TripImpossible: the message says which logistics rule makes it impossible
             raise HTTPException(422, str(e))
     else:
         result = await planner.plan((o["lat"], o["lon"]), (d["lat"], d["lon"]), req.constraints)
