@@ -9,7 +9,7 @@ import RouteChips from "@/components/RouteChips";
 import LayerToggles from "@/components/LayerToggles";
 import MapLegend, { LegendBotStatus } from "@/components/MapLegend";
 import TripOptions from "@/components/TripOptions";
-import TigerDataControl from "@/components/TigerDrawer";
+import InsightsTab from "@/components/InsightsTab";
 import { TripConstraints, clock, fitRoutes } from "@/lib/routeFit";
 
 type SortKey = "default" | "cost" | "time" | "co2" | "ontime";
@@ -102,6 +102,8 @@ export default function Home() {
   const [sortBy, setSortBy] = useState<SortKey>("default"); // neutral card order only; nothing is ever highlighted by it
   const [drawer, setDrawer] = useState(false);
   const [timelapseOpen, setTimelapseOpen] = useState(false);
+  const [leftTab, setLeftTab] = useState<"plan" | "insights">("plan");
+  const [leftOpen, setLeftOpen] = useState(true); // collapses the left panel to map-only on wide screens
   const [hiddenBots, setHiddenBots] = useState<Partial<Record<BotKey, boolean>>>({});
   const [showAll, setShowAll] = useState(false); // "Show all routes": ignore the chosen route's highlight
   const promptRef = useRef<HTMLTextAreaElement>(null);
@@ -386,7 +388,6 @@ export default function Home() {
           )}
         </ul>
         <div className="ml-auto flex items-center gap-2">
-          <TigerDataControl />
           <button
             type="button"
             data-testid="watch-bots"
@@ -402,12 +403,36 @@ export default function Home() {
 
       {/* Body: trip box + timeline | map | route cards. Stacks vertically below lg. */}
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto lg:flex-row lg:overflow-hidden">
-        {/* LEFT: trip box, then a run timeline once a trip starts */}
+        {/* LEFT: a page selector (Plan / Insights), collapsible to map-only on wide screens */}
         <section
-          aria-label="Plan a trip"
-          className="flex shrink-0 flex-col gap-3 overflow-y-auto border-b border-zinc-200 bg-white p-4 lg:h-full lg:w-[var(--left-w)] lg:border-r lg:border-b-0"
+          aria-label="Left panel"
+          data-testid="left-panel"
+          className={`flex shrink-0 flex-col gap-3 overflow-y-auto border-b border-zinc-200 bg-white lg:h-full lg:border-b-0 ${leftOpen ? "p-4 lg:w-[var(--left-w)] lg:border-r" : "hidden lg:w-0 lg:border-r-0 lg:p-0"}`}
           style={{ "--left-w": `${LEFT_W}px` } as React.CSSProperties}
         >
+          <div role="tablist" aria-label="Left panel pages" className="flex shrink-0 gap-1 rounded-full bg-zinc-100 p-1 text-xs font-semibold">
+            {([
+              { key: "plan", label: "Plan a trip" },
+              { key: "insights", label: "Insights" },
+            ] as const).map((t) => (
+              <button
+                key={t.key}
+                type="button"
+                role="tab"
+                aria-selected={leftTab === t.key}
+                data-testid={`left-tab-${t.key}`}
+                onClick={() => setLeftTab(t.key)}
+                className={`flex-1 rounded-full px-3 py-1.5 transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-900 ${leftTab === t.key ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-500 hover:text-zinc-700"}`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          {leftTab === "insights" && <InsightsTab />}
+
+          {leftTab === "plan" && (
+          <>
           <form
             className="flex shrink-0 flex-col gap-3"
             onSubmit={(e) => {
@@ -657,7 +682,23 @@ export default function Home() {
               )}
             </div>
           )}
+          </>
+          )}
         </section>
+
+        {/* Collapse handle: hides the left panel to map-only on wide screens */}
+        <button
+          type="button"
+          data-testid="toggle-left-panel"
+          aria-expanded={leftOpen}
+          aria-label={leftOpen ? "Hide the trip panel" : "Show the trip panel"}
+          onClick={() => setLeftOpen((v) => !v)}
+          className="hidden shrink-0 items-center justify-center bg-zinc-100 text-zinc-400 hover:bg-zinc-200 hover:text-zinc-700 focus-visible:outline-2 focus-visible:outline-zinc-900 lg:flex lg:h-full lg:w-3"
+        >
+          <svg aria-hidden viewBox="0 0 24 24" className={`h-3 w-3 transition-transform duration-150 ${leftOpen ? "" : "rotate-180"}`} fill="currentColor">
+            <path d="M15 6l-6 6 6 6" />
+          </svg>
+        </button>
 
         {/* MIDDLE: map */}
         <div className="relative h-[50vh] shrink-0 lg:h-full lg:flex-1">

@@ -8,7 +8,8 @@ export type ExampleTrip = {
   deadline?: string;
 };
 
-// Example trips for judges. Each one was run end to end and resolves to built-in Toronto places.
+// Example trips for judges. Kept to two on purpose: enough to show range without crowding the panel.
+// Each one was run end to end and resolves to built-in Toronto places.
 export const EXAMPLE_TRIPS: ExampleTrip[] = [
   {
     title: "Oshawa to King & Bay by 8:30",
@@ -21,16 +22,6 @@ export const EXAMPLE_TRIPS: ExampleTrip[] = [
     title: "Late with luggage",
     situation: "Deadline at 6pm, 2 suitcases, no Presto card",
     prompt: "I'm at Kipling Station and need to reach Union Station by 6pm. I have 2 suitcases and no Presto card.",
-  },
-  {
-    title: "Student on a budget",
-    situation: "Only $5 to spend, cheapest way across town",
-    prompt: "I'm a student at York University going to Kensington Market. Cheapest way please, my budget is $5.",
-  },
-  {
-    title: "Green with an e-bike",
-    situation: "Has an e-bike, wants the lowest-emission trip",
-    prompt: "From Kensington Market to the Distillery District. I have an e-bike and want the greenest way there.",
   },
 ];
 

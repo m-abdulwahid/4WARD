@@ -1,13 +1,12 @@
 "use client";
 import { useState } from "react";
 
-// Shared small-chart primitives. Originally built inside LivePanel; now also used by the Reliable bot's
-// Evidence section and the Tiger Data drawer, so they live here instead of being duplicated three times.
+// Shared small-chart primitives: the multi-series chart and timestamp helpers used by the Reliable
+// bot's Evidence section and the Insights tab.
 
 export const INK = "#27272a";
 export const MUTED = "#71717a";
 export const GRID = "#e4e4e7";
-export const ACCENT = "#2a6fdb";
 
 export function ago(ts: number | null): string {
   if (!ts) return "never";
@@ -21,69 +20,6 @@ export function ago(ts: number | null): string {
 export function fmtTs(ts: number | null): string {
   if (!ts) return "—";
   return new Date(ts * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-}
-
-const SPARK_W = 520;
-const SPARK_H = 140;
-const SPARK_M = { l: 40, r: 12, t: 10, b: 22 };
-
-export function Sparkline({ pts, unit }: { pts: { x: number; y: number }[]; unit: string }) {
-  if (pts.length < 2) return <p className="text-xs text-zinc-500">Not enough polls yet for a sparkline.</p>;
-  const xs = pts.map((p) => p.x);
-  const ys = pts.map((p) => p.y);
-  const x0 = xs[0];
-  const x1 = xs[xs.length - 1];
-  const y0 = Math.min(...ys);
-  const y1 = Math.max(...ys);
-  const M = SPARK_M, W = SPARK_W, H = SPARK_H;
-  const sx = (x: number) => M.l + ((x - x0) / Math.max(1, x1 - x0)) * (W - M.l - M.r);
-  const sy = (y: number) => H - M.b - ((y - y0) / (y1 - y0 || 1)) * (H - M.t - M.b);
-  const path = pts.map((p, i) => `${i ? "L" : "M"}${sx(p.x)},${sy(p.y)}`).join(" ");
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label={unit}>
-      <line x1={M.l} x2={W - M.r} y1={sy(y0)} y2={sy(y0)} stroke={GRID} />
-      <line x1={M.l} x2={W - M.r} y1={sy(y1)} y2={sy(y1)} stroke={GRID} />
-      <text x={M.l - 4} y={sy(y1) + 3} textAnchor="end" fontSize={9} fill={MUTED}>{Math.round(y1)}s</text>
-      <text x={M.l - 4} y={sy(y0) + 3} textAnchor="end" fontSize={9} fill={MUTED}>{Math.round(y0)}s</text>
-      <path d={path} fill="none" stroke={ACCENT} strokeWidth={2} strokeLinejoin="round" />
-      <circle cx={sx(pts[pts.length - 1].x)} cy={sy(pts[pts.length - 1].y)} r={3} fill={ACCENT} />
-      <text x={sx(x0)} y={H - 4} textAnchor="start" fontSize={9} fill={MUTED}>
-        {new Date(x0 * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
-      </text>
-      <text x={sx(x1)} y={H - 4} textAnchor="end" fontSize={9} fill={MUTED}>
-        {new Date(x1 * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
-      </text>
-    </svg>
-  );
-}
-
-export function HistoryBars({ rows, label = "avg delay / hour" }: { rows: { bucket: number; avg_delay_s: number | null }[]; label?: string }) {
-  const pts = rows.filter((r) => r.avg_delay_s != null).map((r) => ({ x: r.bucket, y: r.avg_delay_s as number }));
-  const W = SPARK_W, H = SPARK_H, M = SPARK_M;
-  if (!pts.length) return <p className="text-xs text-zinc-500">No hourly aggregate rows yet.</p>;
-  const maxY = Math.max(...pts.map((p) => p.y), 1);
-  const bw = Math.max(4, (W - M.l - M.r) / pts.length - 2);
-  const sx = (i: number) => M.l + (i + 0.5) * ((W - M.l - M.r) / pts.length);
-  const barH = (y: number) => (y / maxY) * (H - M.t - M.b);
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label="Average delay by hour">
-      {pts.map((p, i) => {
-        const h = barH(p.y);
-        return (
-          <g key={p.x}>
-            <rect x={sx(i) - bw / 2} y={H - M.b - h} width={bw} height={h} fill={ACCENT} opacity={0.85} rx={1} />
-            {i % Math.ceil(pts.length / 6) === 0 && (
-              <text x={sx(i)} y={H - 4} textAnchor="middle" fontSize={9} fill={MUTED}>
-                {new Date(p.x * 1000).toLocaleTimeString([], { hour: "numeric" })}
-              </text>
-            )}
-          </g>
-        );
-      })}
-      <text x={M.l - 4} y={M.t + 4} textAnchor="end" fontSize={9} fill={MUTED}>{Math.round(maxY)}s</text>
-      <text x={W - M.r} y={M.t + 4} textAnchor="end" fontSize={9} fill={INK}>{label}</text>
-    </svg>
-  );
 }
 
 const SERIES_W = 560;
