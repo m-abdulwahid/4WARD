@@ -149,3 +149,37 @@ async def test_identical_requests_share_one_computation(fake_planner):
     n = len(fake_planner)
     await trip.plan_trip(A, [stop(B)], C, cons())
     assert len(fake_planner) == n
+
+
+@pytest.mark.asyncio
+async def test_reliability_combines_across_legs_including_road_only_legs_with_no_route_id(monkeypatch):
+    """Regression: a multi-stop trip's reliability used to vanish whenever any leg's reliability came
+    from a road/bus leg rather than a transit route_id (Phase 6b let road-only legs score too, but this
+    merge still gated on route_id-only legs matching the count of scored picks). Also: confidence and
+    delay_factors must survive the per-leg product, not just reliability_pct/history_days."""
+    trip._cache.clear()
+
+    async def plan(o, d, c):
+        a, b = {"lat": o[0], "lon": o[1]}, {"lat": d[0], "lon": d[1]}
+        if abs(o[0] - A["lat"]) < 1e-6:  # first pair: a road leg with reliability but no route_id
+            cand = leg_cand("drive", a, b, 10, cost=5, co2=2)
+            cand["legs"][0]["timing"] = "road"
+            cand["legs"][0]["base_s"] = cand["legs"][0]["duration_s"]
+            cand["reliability"] = {"reliability_pct": 90, "history_days": 0,
+                                    "confidence": "default (no matching history; the percentage comes from the road-timing model only)",
+                                    "delay_factors": [{"text": "road leg delay", "source": "TomTom (live, not stored)", "timestamp": 1.0, "default": False}]}
+            return {"candidates": [cand], "traffic_multiplier": 1.0, "data_notes": []}
+        cand = leg_cand("transit", a, b, 20, cost=3, co2=0.5)  # second pair: a transit leg with route_id
+        cand["legs"][0]["route_id"] = "501"
+        cand["reliability"] = {"reliability_pct": 80, "history_days": 5, "confidence": "low",
+                                "delay_factors": [{"text": "transit leg delay", "source": "TTC realtime (GTFS-RT)", "timestamp": 2.0, "default": False}]}
+        return {"candidates": [cand], "traffic_multiplier": 1.0, "data_notes": []}
+
+    monkeypatch.setattr(trip.planner, "plan", plan)
+    out = await trip.plan_trip(A, [stop(B)], C, cons(has_car=True))
+    rel = out["candidates"][0]["reliability"]
+    assert rel["reliability_pct"] == round(100 * 0.9 * 0.8)
+    assert rel["history_days"] == 0
+    assert rel["confidence"] == "default (no matching history; the percentage comes from the road-timing model only)"
+    assert len(rel["delay_factors"]) == 2
+    assert {f["text"] for f in rel["delay_factors"]} == {"road leg delay", "transit leg delay"}

@@ -33,7 +33,7 @@ from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, field_validator
 
-from . import fares, highways, osm, pareto, planner, schedule
+from . import fares, highways, osm, pareto, planner, reliability, schedule
 from .config import LEAVE_BY_SEARCH_MIN, PARKING_WALK_MIN, traffic_multiplier
 from .geo import haversine_km
 
@@ -414,12 +414,16 @@ def _build(points, picks, sched, bad, depart, finish, deadline, order_prefix, st
     if deadline:
         cand["meets_deadline"] = total_arrive <= deadline
         cand["leave_by"] = _hm(deadline - timedelta(minutes=(total_arrive - depart).total_seconds() / 60))
-    if len(rels) == len([c for c in picks if any(l.get("route_id") for l in c["legs"])]) and rels:
+    scoreable = [c for c in picks if any(l.get("route_id") or l.get("timing") in ("road", "bus_est") for l in c["legs"])]
+    if len(rels) == len(scoreable) and rels:
         p = 1.0
         for r in rels:
             p *= r["reliability_pct"] / 100
-        cand["reliability"] = {"reliability_pct": round(100 * p), "history_days": min(r["history_days"] for r in rels),
-                               "basis": "product of per-leg on-time chances (ESTIMATED, assumes legs are independent)"}
+        history_days = min(r["history_days"] for r in rels)
+        cand["reliability"] = {"reliability_pct": round(100 * p), "history_days": history_days,
+                               "basis": "product of per-leg on-time chances (ESTIMATED, assumes legs are independent)",
+                               "confidence": reliability.confidence_label(history_days),
+                               "delay_factors": [f for r in rels for f in (r.get("delay_factors") or [])]}
     return cand
 
 
