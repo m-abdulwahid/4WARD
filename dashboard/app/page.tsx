@@ -11,7 +11,9 @@ import RouteSummary from "@/components/RouteSummary";
 import RouteChips from "@/components/RouteChips";
 import LayerToggles from "@/components/LayerToggles";
 import MapLegend, { LegendBotStatus } from "@/components/MapLegend";
-import TripOptions, { Priority } from "@/components/TripOptions";
+import TripOptions from "@/components/TripOptions";
+
+type SortKey = "default" | "cost" | "time" | "co2" | "ontime";
 import ExampleTrips from "@/components/ExampleTrips";
 import { TimeKind, parseTime, writeTimeToPrompt } from "@/lib/timeParse";
 
@@ -130,7 +132,7 @@ export default function Home() {
   const [showTtc, setShowTtc] = useState(false);
   const [bikeStations, setBikeStations] = useState<BikeStation[] | null>(null);
   const [insightsSeen, setInsightsSeen] = useState(false);
-  const [priority, setPriority] = useState<Priority>(null);
+  const [sortBy, setSortBy] = useState<SortKey>("default"); // neutral card order only; nothing is ever highlighted by it
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const runIdRef = useRef<string | null>(null);
@@ -305,21 +307,19 @@ export default function Home() {
   const [hoverBot, setHoverBot] = useState<BotKey | null>(null); // chip under the pointer (or focused)
   const highlight = (hoverBot && !hiddenBots[hoverBot] ? hoverBot : null) ?? focus ?? (showAll ? null : chosen);
 
-  // When the run finishes, open the route that best matches the user's priority (engine numbers only).
-  useEffect(() => {
-    if (running || !priority || focus || chosen) return;
-    const ready = BOTS.filter((b) => bots[b.key].route);
-    if (!ready.length) return;
-    const by = (f: (r: Candidate) => number) => ready.reduce((a, b) => (f(bots[b.key].route!) < f(bots[a.key].route!) ? b : a)).key;
-    const pick: BotKey =
-      priority === "cheapest" ? by((r) => r.cost ?? Infinity)
-      : priority === "fastest" ? by((r) => r.duration_min ?? Infinity)
-      : priority === "greenest" ? by((r) => r.co2_kg ?? Infinity)
-      : priority === "fewest_transfers" ? by((r) => r.transfers ?? Infinity)
-      : by((r) => r.walk_m ?? Infinity);
-    setFocus(pick);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [running]);
+  // Card order for the neutral sort control. The default keeps the fixed bot order; a bot with no route sorts last.
+  const sortedBots = useMemo(() => {
+    if (sortBy === "default") return [...BOTS];
+    const value = (k: BotKey): number => {
+      const r = bots[k].route;
+      if (!r) return Infinity;
+      if (sortBy === "cost") return r.cost ?? Infinity;
+      if (sortBy === "time") return r.duration_min ?? Infinity;
+      if (sortBy === "co2") return r.co2_kg ?? Infinity;
+      return r.reliability ? -r.reliability.reliability_pct : Infinity; // on-time %: higher first
+    };
+    return [...BOTS].sort((a, b) => value(a.key) - value(b.key));
+  }, [bots, sortBy]);
   routeViewRef.current = routeView;
   const mapRoutes = useMemo(
     () =>
@@ -486,7 +486,7 @@ export default function Home() {
         >
           <div className="w-max">
             <RouteChips
-              found={{ cheap: !!bots.cheap.route, fastest: !!bots.fastest.route, green: !!bots.green.route, best: !!bots.best.route }}
+              found={{ cheap: !!bots.cheap.route, fastest: !!bots.fastest.route, green: !!bots.green.route, reliable: !!bots.reliable.route }}
               hidden={hiddenBots}
               onToggle={toggleBot}
               onShowAll={showEveryRoute}
@@ -699,8 +699,7 @@ export default function Home() {
                   );
                 })}
               </div>
-              <TripOptions prompt={prompt} setPrompt={setPrompt} focusPrompt={() => promptRef.current?.focus()} priority={priority}
-                setPriority={setPriority}
+              <TripOptions prompt={prompt} setPrompt={setPrompt} focusPrompt={() => promptRef.current?.focus()}
                 deadlineText={deadlineText}
                 setDeadlineText={(t) => typeTime("deadline", t)}
                 leaveText={leaveText}
@@ -826,7 +825,22 @@ export default function Home() {
                 Watch the trip unfold
               </button>
             )}
-            {BOTS.map((b) => (
+            <label className="flex items-center justify-between gap-2 text-xs text-zinc-600">
+              Order cards by
+              <select
+                data-testid="sort-routes"
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value as SortKey)}
+                className="rounded-lg bg-white px-2 py-1 text-xs text-zinc-800 ring-1 ring-zinc-200 focus-visible:outline-2 focus-visible:outline-zinc-900"
+              >
+                <option value="default">Bot order</option>
+                <option value="cost">Cost (lowest first)</option>
+                <option value="time">Time (shortest first)</option>
+                <option value="co2">CO₂e (lowest first)</option>
+                <option value="ontime">On-time % (highest first)</option>
+              </select>
+            </label>
+            {sortedBots.map((b) => (
               <RouteCard
                 key={b.key}
                 bot={b}

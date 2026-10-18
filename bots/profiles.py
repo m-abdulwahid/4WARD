@@ -23,9 +23,9 @@ PROFILES: dict[str, Profile] = {
     "green": Profile("green", "Environmental", "#0d9488",
                      "Minimize CO2e emissions: prefer walking, biking, e-bikes and transit over driving, but keep the trip "
                      "practical (not several times slower than alternatives) and bag-friendly."),
-    "best": Profile("best", "Best overall", "#7c3aed",
-                    "Best balanced trip: weigh time, cost, emissions, transfers, walking distance and how easy it is with "
-                    "bags. A route that misses the deadline is never the best."),
+    "reliable": Profile("reliable", "Reliable", "#7c3aed",
+                        "Maximize the probability of arriving by the deadline, using stored delay history. Ties go to the "
+                        "faster route, then the cheaper one."),
 }
 
 
@@ -39,7 +39,7 @@ def modes_for(profile_key: str, c: dict) -> list[str]:
         modes = ["transit", "bikeshare", "walk"] + (["drive", "park_ride"] if has_car else ["rideshare"]) + (["ebike"] if has_ebike else []) + (["bike"] if has_bike else [])
     elif profile_key == "green":
         modes = ["walk", "bikeshare", "transit"] + (["bike"] if has_bike else []) + (["ebike"] if has_ebike else [])
-    else:  # best
+    else:  # reliable
         modes = ["walk", "bikeshare", "transit"] + (["drive", "park_ride"] if has_car else ["rideshare"]) + (["bike"] if has_bike else []) + (["ebike"] if has_ebike else [])
     seen = []
     for m in modes + base:

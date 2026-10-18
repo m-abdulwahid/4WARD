@@ -57,16 +57,18 @@ def rank(profile_key: str, cands: list[dict], constraints: dict) -> list[dict]:
             return round(t * 10 + cost * 0.1 + rel * 3.0, 4)
         if profile_key == "green":
             return round(co2 * 10 + t * 0.5 + cost * 0.05 + rel * 0.5, 4)
-        walk = min(1.0, c["walk_m"] / 3000)
-        bag_pen = (1 - c.get("bag_friendliness", 1)) * (1.0 if bags else 0.05)
-        return round(0.35 * t + 0.2 * cost + 0.15 * co2 + 0.05 * c["transfers"] + 0.1 * walk + bag_pen + rel * 0.25, 4)
+        # reliable: highest on-time percentage first. Routes with no on-time estimate yet (no transit leg, or
+        # no matching history) rank after every route that has one, never as a made-up 100%. Phase 6 replaces
+        # this with the Monte Carlo on-time probability; ties break by time, then cost (see sort key below).
+        r = c.get("reliability")
+        return round(100 - r["reliability_pct"], 4) if r else 1000.0
 
-    ranked = sorted(pool, key=score)
+    ranked = sorted(pool, key=lambda c: (score(c), c["duration_min"], c["cost"]))
     for c in ranked:
         c["score"] = score(c)
     return ranked
 
 
-def best(profile_key: str, cands: list[dict], constraints: dict) -> dict | None:
+def top(profile_key: str, cands: list[dict], constraints: dict) -> dict | None:
     r = rank(profile_key, cands, constraints)
     return r[0] if r else None

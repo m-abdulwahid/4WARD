@@ -7,7 +7,7 @@ covered separately by tests/test_fares.py's 10 hand-checked trips (pure unit tes
 Usage:
     python -m tests.eval                    # full PROMPTS suite
     python -m tests.eval --n 5               # first 5 prompts only (cheaper/faster smoke run)
-    python -m tests.eval --keys cheap,best   # fewer bots per prompt
+    python -m tests.eval --keys cheap,reliable  # fewer bots per prompt
     python -m tests.eval --md data/eval_results.md
 """
 import argparse

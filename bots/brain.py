@@ -135,7 +135,7 @@ class RuleBrain:
         if page["confirmed"]:
             return {"action": "finish", "route_id": page["confirmed"], "reason": "route confirmed"}
 
-        top = scoring.best(self.p, self._pool(page), c)
+        top = scoring.top(self.p, self._pool(page), c)
 
         if self.explore == "baseline":
             self.baseline = top
@@ -172,7 +172,7 @@ class RuleBrain:
             self.explore = "select"
 
         if not page["selected"]:
-            top = scoring.best(self.p, self._pool(page), c)
+            top = scoring.top(self.p, self._pool(page), c)
             if not top:
                 return {"action": "finish", "route_id": None, "reason": "no usable route found"}
             return {"action": "click", "testid": f"select-route-{top['id']}",
@@ -269,7 +269,7 @@ class FallbackBrain:
     async def next_action(self, page: dict, history: list[dict]) -> dict:
         # Gemini only ever plans the SETUP (planner_state "idle"): which modes/constraints to try, given the
         # user's request. The moment results exist, which route wins is always decided by the same deterministic
-        # reconciler every bot uses (RuleBrain's scoring.rank()/scoring.best()) -- never by asking an LLM to judge
+        # reconciler every bot uses (RuleBrain's scoring.rank()/scoring.top()) -- never by asking an LLM to judge
         # numbers it was only shown as text. That used to be a PHASE 3 Gemini call, and it was a real bug: Gemini's
         # own "which is better" judgment could (and did) disagree with the engine's own scoring, making bots with
         # very different objectives converge on the same wrong pick. See CLAUDE.md: "Numbers come from the engine.

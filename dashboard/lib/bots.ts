@@ -6,7 +6,7 @@ export const BOTS = [
   { key: "cheap", name: "Economic", color: "#b45309", blurb: "Lowest total cost" },
   { key: "fastest", name: "Efficient", color: "#dc2626", blurb: "Shortest door to door time" },
   { key: "green", name: "Environmental", color: "#047857", blurb: "Lowest CO₂" },
-  { key: "best", name: "Best overall", color: "#7c3aed", blurb: "Balanced trade-offs" },
+  { key: "reliable", name: "Reliable", color: "#7c3aed", blurb: "Most likely to arrive on time" },
 ] as const;
 export type BotKey = (typeof BOTS)[number]["key"];
 
@@ -39,7 +39,7 @@ export const blankBots = (): Record<BotKey, BotState> => ({
   cheap: { status: "WAITING", steps: 0, log: [] },
   fastest: { status: "WAITING", steps: 0, log: [] },
   green: { status: "WAITING", steps: 0, log: [] },
-  best: { status: "WAITING", steps: 0, log: [] },
+  reliable: { status: "WAITING", steps: 0, log: [] },
 });
 
 export const STATUS_CHIP: Record<BotStatus, { label: string; cls: string }> = {

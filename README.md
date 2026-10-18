@@ -8,7 +8,7 @@ objective, operate our own map dashboard in parallel and each build a route. You
 | Economic | `cheap` | Lowest total cost: fares with Presto rules, parking, gas, bike fees |
 | Efficient | `fastest` | Shortest door to door time |
 | Environmental | `green` | Lowest kg CO2e |
-| Best overall | `best` | Balanced trade-offs: time, cost, emissions, transfers, walking, bags |
+| Reliable | `reliable` | Highest chance of arriving by the deadline (Tiger Data delay history) |
 
 Internal keys are used by the backend, the bots and every `data-testid` (`bot-cheap`, `choose-fastest`, ...). Only the
 display names changed; never rename the keys.

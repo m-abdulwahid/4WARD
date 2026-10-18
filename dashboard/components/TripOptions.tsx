@@ -6,8 +6,6 @@ import { ParsedTime, TimeKind, parseTime, timeInPrompt } from "@/lib/timeParse";
 // Option cards under the trip box. Every card writes a phrase the prompt parser (bots/nlp.py) already understands,
 // so the prompt text stays the single source of truth. Options with no backend support are shown as such.
 
-export type Priority = "cheapest" | "fastest" | "greenest" | "fewest_transfers" | "least_walking" | null;
-
 const BAGS = /\b(\d+|an?|one|two|three|four)\s+(?:big |large |heavy |carry-on )?(?:bags?|suitcases?|luggage)\b/i;
 const WORDS: Record<string, number> = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4 };
 
@@ -37,14 +35,6 @@ const SITUATION: Toggle[] = [
     test: /\b(stroller|wheelchair)\b/i,
     note: "Same as stairs for now. Step-free access is not checked, so no route is marked accessible.",
   },
-];
-
-const PRIORITIES: { key: Exclude<Priority, null>; label: string }[] = [
-  { key: "cheapest", label: "Cheapest" },
-  { key: "fastest", label: "Fastest" },
-  { key: "greenest", label: "Greenest" },
-  { key: "fewest_transfers", label: "Fewest transfers" },
-  { key: "least_walking", label: "Least walking" },
 ];
 
 const tidy = (s: string) => s.replace(/\s+([.,])/g, "$1").replace(/\s{2,}/g, " ").trim();
@@ -102,8 +92,6 @@ export default function TripOptions({
   prompt,
   setPrompt,
   focusPrompt,
-  priority,
-  setPriority,
   deadlineText,
   setDeadlineText,
   leaveText,
@@ -112,8 +100,6 @@ export default function TripOptions({
   prompt: string;
   setPrompt: (f: (p: string) => string) => void;
   focusPrompt: () => void;
-  priority: Priority;
-  setPriority: (p: Priority) => void;
   deadlineText: string;
   setDeadlineText: (t: string) => void;
   leaveText: string;
@@ -197,15 +183,6 @@ export default function TripOptions({
             <Card key={t.key} id={t.key} label={t.label} note={t.note} on={t.test.test(prompt)} onClick={() => toggle(t)} />
           ))}
           <Card id="kids" label="Travelling with kids" on={false} disabled note="Coming soon" />
-        </div>
-      </Group>
-
-      <Group id="priorities" title="Priorities" summary={priority ? PRIORITIES.find((p) => p.key === priority)!.label : "Optional"} open={!!open.priorities} onToggle={() => flip("priorities")}>
-        <p className="mb-1.5 text-[11px] leading-snug text-zinc-500">All four bots always run. Your priority picks which of their routes opens first, using the engine&apos;s numbers.</p>
-        <div className="grid grid-cols-2 gap-1.5" role="group" aria-label="Show this route first">
-          {PRIORITIES.map((p) => (
-            <Card key={p.key} id={`priority-${p.key}`} label={p.label} on={priority === p.key} onClick={() => setPriority(priority === p.key ? null : p.key)} />
-          ))}
         </div>
       </Group>
 

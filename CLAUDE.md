@@ -60,9 +60,9 @@ Display names (UI and docs) with the internal key in brackets. Keys are used by 
 1. Economic (`cheap`): lowest total cost (fares with Presto rules, parking, gas, bike fees).
 2. Efficient (`fastest`): shortest door to door time.
 3. Environmental (`green`): lowest kg CO2e.
-4. Best overall (`best`): balanced trade-offs between time, cost, emissions, transfers, walking, and bags.
+4. Reliable (`reliable`): highest chance of arriving by the deadline, from Tiger Data delay history. Ties go to the faster route, then the cheaper one.
 
-Idea for later: a "Most reliable" goal (highest chance of making the deadline, from Tiger Data delay history).
+There is no "Best overall" bot, badge, highlight or recommendation anywhere in the product. The user chooses. The only ordering control is a neutral "Order cards by" sort (cost, time, CO2e, on-time %) with no default highlight.
 
 ## How bots work
 

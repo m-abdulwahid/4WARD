@@ -16,17 +16,17 @@ CANDS = [cand("walk", 200, 0, 0, walk=15000, bag=0.2), cand("rail", 46, 3.3, 0.6
 
 def test_each_objective_picks_a_different_winner():
     c = {"bags": 0}
-    assert scoring.best("cheap", CANDS, c)["id"] == "rail"      # walk is free but impractical (200 min)
-    assert scoring.best("fastest", CANDS, c)["id"] == "drive"   # late_fast misses the deadline
-    assert scoring.best("green", CANDS, c)["id"] == "bikeshare"
+    assert scoring.top("cheap", CANDS, c)["id"] == "rail"      # walk is free but impractical (200 min)
+    assert scoring.top("fastest", CANDS, c)["id"] == "drive"   # late_fast misses the deadline
+    assert scoring.top("green", CANDS, c)["id"] == "bikeshare"
 
 
 def test_bags_exclude_bag_hostile_routes():
-    assert scoring.best("green", CANDS, {"bags": 2})["id"] == "rail"
+    assert scoring.top("green", CANDS, {"bags": 2})["id"] == "rail"
 
 
 def test_unavailable_and_no_routes():
-    assert scoring.best("cheap", [{"id": "x", "available": False}], {}) is None
+    assert scoring.top("cheap", [{"id": "x", "available": False}], {}) is None
 
 
 def test_reliability_breaks_a_near_tie_toward_the_more_reliable_option():
@@ -34,7 +34,7 @@ def test_reliability_breaks_a_near_tie_toward_the_more_reliable_option():
     but only once there's enough history behind that signal to trust it."""
     fast_unreliable = {**cand("fast_flaky", 20, 5, 1), "reliability": {"reliability_pct": 40, "history_days": 14}}
     fast_reliable = {**cand("fast_solid", 21, 5, 1), "reliability": {"reliability_pct": 95, "history_days": 14}}
-    assert scoring.best("fastest", [fast_unreliable, fast_reliable], {"bags": 0})["id"] == "fast_solid"
+    assert scoring.top("fastest", [fast_unreliable, fast_reliable], {"bags": 0})["id"] == "fast_solid"
 
 
 def test_reliability_barely_matters_with_thin_history():
@@ -42,7 +42,29 @@ def test_reliability_barely_matters_with_thin_history():
     difference should still decide it, exactly like before reliability existed."""
     fast_flaky_thin_history = {**cand("fast_flaky", 20, 5, 1), "reliability": {"reliability_pct": 0, "history_days": 1}}
     slightly_slower = {**cand("slightly_slower", 21, 5, 1)}
-    assert scoring.best("fastest", [fast_flaky_thin_history, slightly_slower], {"bags": 0})["id"] == "fast_flaky"
+    assert scoring.top("fastest", [fast_flaky_thin_history, slightly_slower], {"bags": 0})["id"] == "fast_flaky"
+
+
+def test_reliable_bot_ranks_by_on_time_percentage_then_time_then_cost():
+    def rel(c, pct):
+        return {**c, "reliability": {"reliability_pct": pct, "history_days": 14}}
+
+    solid_slow = rel(cand("solid_slow", 50, 3, 1), 95)
+    flaky_fast = rel(cand("flaky_fast", 20, 3, 1), 60)
+    no_data = cand("no_data", 10, 1, 0)  # fastest of all, but no on-time estimate: never ranks as a made-up 100%
+    ranked = scoring.rank("reliable", [flaky_fast, no_data, solid_slow], {"bags": 0})
+    assert [c["id"] for c in ranked] == ["solid_slow", "flaky_fast", "no_data"]
+    tie_slow, tie_fast = rel(cand("tie_slow", 40, 3, 1), 90), rel(cand("tie_fast", 30, 9, 1), 90)
+    assert scoring.top("reliable", [tie_slow, tie_fast], {"bags": 0})["id"] == "tie_fast"
+    tie_cheap, tie_dear = rel(cand("tie_cheap", 30, 3, 1), 90), rel(cand("tie_dear", 30, 9, 1), 90)
+    assert scoring.top("reliable", [tie_dear, tie_cheap], {"bags": 0})["id"] == "tie_cheap"
+
+
+def test_no_best_overall_profile_remains():
+    from bots.profiles import PROFILES
+
+    assert list(PROFILES) == ["cheap", "fastest", "green", "reliable"]
+    assert [p.name for p in PROFILES.values()] == ["Economic", "Efficient", "Environmental", "Reliable"]
 
 
 def test_reliability_penalty_pure_function():

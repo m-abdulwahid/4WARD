@@ -18,7 +18,7 @@ async def test_no_rerun_when_nothing_duplicates(monkeypatch):
         return route("should-not-run", 0)
 
     monkeypatch.setattr(orchestrate, "_run_one_local", fake_run_one)
-    out = await orchestrate._resolve_diversity(["cheap", "fastest", "green", "best"], results, {}, "", None, 1, 1, False, "local")
+    out = await orchestrate._resolve_diversity(["cheap", "fastest", "green", "reliable"], results, {}, "", None, 1, 1, False, "local")
     assert out == results
     assert not called
 
@@ -33,11 +33,11 @@ async def test_duplicate_reruns_with_only_the_one_duplicated_id_avoided(monkeypa
         return route("walk", 25)  # a real, reasonably comparable alternative
 
     monkeypatch.setattr(orchestrate, "_run_one_local", fake_run_one)
-    out = await orchestrate._resolve_diversity(["cheap", "fastest", "green", "best"], results, {}, "", None, 1, 1, False, "local")
+    out = await orchestrate._resolve_diversity(["cheap", "fastest", "green", "reliable"], results, {}, "", None, 1, 1, False, "local")
     assert out[0]["route"]["id"] == "transit_rail"  # cheap claimed it first, never reran
     assert out[1]["route"]["id"] == "rideshare"      # fastest was never a duplicate
     assert out[2]["route"]["id"] == "walk"           # green duplicated cheap's pick -> reran, "walk" is free, accepted
-    # best also duplicated cheap's original pick, but by the time it's processed "walk" is already
+    # reliable also duplicated cheap's original pick, but by the time it's processed "walk" is already
     # claimed by green -- its rerun would just be a *different* duplicate, so it keeps its honest original
     assert out[3]["route"]["id"] == "transit_rail"
     # every rerun avoided only the single id that bot actually duplicated, never the whole claimed set
@@ -65,5 +65,5 @@ async def test_keeps_original_when_rerun_is_dramatically_worse(monkeypatch):
         return route("walk", 200)  # technically different, but absurdly worse than the 22 min duplicate
 
     monkeypatch.setattr(orchestrate, "_run_one_local", fake_run_one)
-    out = await orchestrate._resolve_diversity(["cheap", "best"], results, {}, "", None, 1, 1, False, "local")
+    out = await orchestrate._resolve_diversity(["cheap", "reliable"], results, {}, "", None, 1, 1, False, "local")
     assert out[1]["route"]["id"] == "transit_rail"
