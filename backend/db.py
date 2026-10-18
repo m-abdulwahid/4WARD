@@ -159,6 +159,20 @@ class Store:
                 (route_id, dow, hour, since), fetch=True)
         return {r[0]: r[1] for r in (rows or []) if r[1] is not None}
 
+    def latest_route_delay(self, route_id: str, max_age_s: int = 300) -> tuple[float, float] | None:
+        """(avg delay seconds, age seconds) of the newest LIVE poll for a TTC route, or None if there is none that fresh."""
+        now = time.time()
+        if self.pg:
+            rows = self._exec("SELECT extract(epoch from ts)::bigint, avg_delay_s FROM ttc_route_snapshot WHERE route_id = %s AND source = 'live' "
+                              "AND avg_delay_s IS NOT NULL ORDER BY ts DESC LIMIT 1", (route_id,), fetch=True)
+        else:
+            rows = self._exec("SELECT ts, avg_delay_s FROM ttc_route_snapshot WHERE route_id = %s AND source = 'live' "
+                              "AND avg_delay_s IS NOT NULL ORDER BY ts DESC LIMIT 1", (route_id,), fetch=True)
+        if not rows:
+            return None
+        ts, delay = int(rows[0][0]), float(rows[0][1])
+        return (delay, now - ts) if now - ts <= max_age_s else None
+
     def sources(self, hours: int = 24) -> dict:
         since = int(time.time()) - hours * 3600
         ph = "to_timestamp(%s)" if self.pg else "%s"

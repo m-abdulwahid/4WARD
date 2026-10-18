@@ -71,7 +71,9 @@ def annotate(candidates: list[dict], constraints: dict, depart: datetime) -> Non
         if not c.get("available"):
             continue
         try:
-            rel = score_route(c, constraints, depart)
+            # each candidate may leave at its own time (planning backwards from a deadline), so use its own departure
+            own = datetime.fromisoformat(c["depart_iso"]) if c.get("depart_iso") else depart
+            rel = score_route(c, constraints, own)
         except Exception:
             rel = None  # Tiger Data unreachable etc. must never break route computation
         if rel:

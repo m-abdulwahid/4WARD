@@ -11,7 +11,7 @@ from pathlib import Path
 
 from .config import SPEEDS_KMH, traffic_multiplier
 from .geo import haversine_km
-from . import osm
+from . import osm, timetable
 
 NET_FILE = Path(__file__).resolve().parent.parent / "data" / "transit_network.json"
 WALK_KMH = SPEEDS_KMH["walk"]
@@ -47,7 +47,7 @@ def _net():
                     d = haversine_km((s["lat"], s["lon"]), (t["lat"], t["lon"])) * 1000
                     if d <= TRANSFER_M:
                         walk_s = d * 1.3 / (WALK_KMH / 3.6)
-                        transfers[i].append((j, walk_s + lines[lj]["headway_min"] * 30))
+                        transfers[i].append((j, walk_s))  # the wait for the next vehicle is added per query (it depends on the time)
     return lines, nodes, index, transfers
 
 
@@ -78,8 +78,20 @@ def interchange_stations() -> list[tuple[str, float, float, str]]:
             for name, pts in agg.items()]
 
 
-def _rail_route(a, b, walk_weight: float = 1.0):
+def _rail_route(a, b, walk_weight: float = 1.0, at=None):
+    """Cheapest rail/streetcar path. With `at` (a datetime) the wait for each line comes from its real timetable around that
+    time, and a line with no service then (e.g. GO on a Sunday, a subway at 3 am) cannot be boarded; without it, or for
+    a line with no timetable, the wait is the ESTIMATED half-headway."""
     lines, nodes, index, transfers = _net()
+    waits: dict[int, float] = {}
+
+    def wait(li: int) -> float:
+        if li not in waits:
+            ln = lines[li]
+            real = timetable.wait_estimate_s(f"{ln['route_id']}|{ln['direction']}", at) if (at is not None and timetable.available()) else None
+            waits[li] = ln["headway_min"] * 30 if real is None else real
+        return waits[li]
+
     # access candidates
     acc = []
     for i, n in enumerate(nodes):
@@ -92,7 +104,10 @@ def _rail_route(a, b, walk_weight: float = 1.0):
     prev: dict = {}
     pq = []
     for i, d in acc:
-        t = d * 1.3 / (WALK_KMH / 3600) * walk_weight + lines[nodes[i][0]]["headway_min"] * 30
+        w = wait(nodes[i][0])
+        if w == math.inf:
+            continue  # no service on that line at this time
+        t = d * 1.3 / (WALK_KMH / 3600) * walk_weight + w
         if t < dist.get(i, 1e18):
             dist[i] = t
             prev[i] = ("access", None)
@@ -116,8 +131,11 @@ def _rail_route(a, b, walk_weight: float = 1.0):
                 dist[j] = nt
                 prev[j] = ("ride", i)
                 heapq.heappush(pq, (nt, j))
-        for j, cost in transfers[i]:
-            nt = t + cost
+        for j, walk_s in transfers[i]:
+            w = wait(nodes[j][0])
+            if w == math.inf:
+                continue
+            nt = t + walk_s + w
             if nt < dist.get(j, 1e18):
                 dist[j] = nt
                 prev[j] = ("transfer", i)
@@ -141,8 +159,8 @@ def _rail_route(a, b, walk_weight: float = 1.0):
     return {"path": path, "segments": [s for s in segments if len(s["nodes"]) >= 2], "total_s": best[0]}
 
 
-async def rail_option(a, b, hour: int, walk_weight: float = 1.0) -> dict | None:
-    r = _rail_route(a, b, walk_weight)
+async def rail_option(a, b, hour: int, walk_weight: float = 1.0, at=None) -> dict | None:
+    r = _rail_route(a, b, walk_weight, at)
     if not r or not r["segments"]:
         return None
     lines, nodes, _, _ = _net()
@@ -163,13 +181,17 @@ async def rail_option(a, b, hour: int, walk_weight: float = 1.0) -> dict | None:
                          "duration_s": haversine_km(tuple(prev_end), tuple(pts[0])) * 1.3 / (WALK_KMH / 3600),
                          "geometry": [prev_end, pts[0]], "provenance": "estimated"})
         dist_km = sum(haversine_km(tuple(p), tuple(q)) for p, q in zip(pts, pts[1:])) * 1.1
+        est_ride_s = (len(seg["nodes"]) - 1) * (ln["sec_per_stop"] + DWELL_S)
         legs.append({
             "mode": ln["type"], "label": f"{ln['name']} ({ln['stops'][nodes[seg['nodes'][0]][1]]['name']} → "
                      f"{ln['stops'][nodes[seg['nodes'][-1]][1]]['name']})",
             "from": pts[0], "to": pts[-1], "distance_km": round(dist_km, 3),
-            "duration_s": (len(seg["nodes"]) - 1) * (ln["sec_per_stop"] + DWELL_S) + ln["headway_min"] * 30,
+            "duration_s": est_ride_s + ln["headway_min"] * 30,
             "geometry": pts, "provenance": "gtfs-static (headway estimated)", "color": ln["color"],
-            "route_id": ln["route_id"]})
+            "route_id": ln["route_id"],
+            # schedule.retime() replaces the estimated wait with the next real departure when the line has a timetable
+            "timing": "rail", "line_key": f"{ln['route_id']}|{ln['direction']}", "from_idx": nodes[seg["nodes"][0]][1],
+            "to_idx": nodes[seg["nodes"][-1]][1], "est_wait_s": ln["headway_min"] * 30, "est_ride_s": est_ride_s})
         prev_end = pts[-1]
     w2 = await osm.leg("walk", tuple(prev_end), b)
     legs.append({"mode": "walk", "label": "Walk to destination", "from": prev_end, "to": list(b),
@@ -185,14 +207,16 @@ async def bus_option(a, b, hour: int) -> dict:
     same OSRM driving route used for `drive`, not a straight line between origin and destination."""
     g = await osm.leg("drive", a, b)
     d = g["distance_km"] * 1.08  # buses detour slightly for stops versus the fastest car route
-    ride_s = d / SPEEDS_KMH["bus"] * 3600 * (traffic_multiplier(hour) / 1.2)
+    base_s = d / SPEEDS_KMH["bus"] * 3600  # before the time-of-day factor; schedule.retime() applies it at the real start time
+    ride_s = base_s * (traffic_multiplier(hour) / 1.2)
     walk_km = 0.35
     legs = [
         {"mode": "walk", "label": "Walk to bus stop", "from": list(a), "to": list(a), "distance_km": walk_km,
          "duration_s": walk_km / WALK_KMH * 3600, "geometry": [list(a)], "provenance": "estimated"},
         {"mode": "bus", "label": "Local bus (estimated, includes ~7 min wait)", "from": list(a), "to": list(b),
          "distance_km": round(d, 3), "duration_s": ride_s + 7 * 60, "geometry": g["geometry"],
-         "provenance": "estimated (road-following, no stop-level schedule)"},
+         "provenance": "estimated (road-following, no stop-level schedule)",
+         "timing": "bus_est", "base_s": base_s, "est_wait_s": 7 * 60},
         {"mode": "walk", "label": "Walk to destination", "from": list(b), "to": list(b), "distance_km": walk_km,
          "duration_s": walk_km / WALK_KMH * 3600, "geometry": [list(b)], "provenance": "estimated"},
     ]

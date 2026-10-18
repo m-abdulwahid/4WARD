@@ -13,7 +13,7 @@ from .profiles import PROFILES
 
 Emit = Callable[[dict], Awaitable[None] | None]
 
-OBSERVE_JS = """() => {
+OBSERVE_JS = """(slim) => {
   const controls = Array.from(document.querySelectorAll('[data-testid]')).map(e => ({
     testid: e.dataset.testid, tag: e.tagName.toLowerCase(),
     text: ((e.tagName === 'INPUT') ? '' : (e.innerText || '')).trim().slice(0, 60),
@@ -22,7 +22,12 @@ OBSERVE_JS = """() => {
   })).filter(c => c.tag === 'button' || c.tag === 'input');
   const w = window.__4ward || {};
   return {controls, state: w.state || 'idle', error: w.error || '', selected: w.selected || null,
-          confirmed: (w.confirmed && w.confirmed.id) || null, candidates: w.candidates || []};
+          confirmed: (w.confirmed && w.confirmed.id) || null,
+          // with the engine's shared set in hand the bot only needs each option's numbers, not its legs and geometry
+          // (a trip with stops has dozens of options; shipping all their geometry on every step makes the bot crawl)
+          candidates: (w.candidates || []).map(c => slim ? {id: c.id, title: c.title, available: c.available, duration_min: c.duration_min,
+            cost: c.cost, co2_kg: c.co2_kg, transfers: c.transfers, walk_m: c.walk_m, bag_friendliness: c.bag_friendliness,
+            meets_deadline: c.meets_deadline, violates: c.violates, reliability: c.reliability} : c)};
 }"""
 
 
@@ -79,7 +84,7 @@ async def run_bot(ctx: BrowserContext, key: str, user: dict, base_url: str, emit
         for n in range(1, max_steps + 1):
             if time.time() - t0 > timeout_s:
                 raise TimeoutError(f"bot exceeded {timeout_s}s")
-            obs = await page.evaluate(OBSERVE_JS)
+            obs = await page.evaluate(OBSERVE_JS, bool(shared))
             action = await brain.next_action(obs, history)
             rec = {"n": n, "t": round(time.time() - t0, 1), **{k: v for k, v in action.items() if v is not None}}
             if action["action"] == "finish":

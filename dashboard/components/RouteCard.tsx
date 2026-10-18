@@ -5,6 +5,7 @@ import type { Candidate } from "@/lib/api";
 import { legColor, legMode, MODES } from "@/lib/modes";
 import ModeBadge from "@/components/ModeBadge";
 import LegTimeline from "@/components/LegTimeline";
+import { timingLine } from "@/lib/timing";
 
 type Bot = { key: BotKey; name: string; color: string; blurb: string };
 
@@ -118,10 +119,7 @@ export default function RouteCard({
           {focused && (
             <div className="mb-3 border-t border-zinc-100 pt-3">
               <p className="text-xs text-zinc-600">
-                {r.depart} to {r.arrive} · walk {r.walk_m} m
-                {deadlineNote
-                  ? ` · ${deadlineNote}`
-                  : r.meets_deadline !== undefined && (r.meets_deadline ? " · makes your deadline" : ` · misses your deadline (leave by ${r.leave_by})`)}
+                {timingLine(r, deadlineNote)} · walk {r.walk_m} m · Toronto time
               </p>
               <div className="mt-2">
                 <LegTimeline route={r} testid={chosen ? "itinerary" : `itinerary-${bot.key}`} />

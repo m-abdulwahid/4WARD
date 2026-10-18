@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
+import { timingLine } from "@/lib/timing";
 import { ALL_MODES, Candidate, Constraints, EndType, RouteResult, StopInput, StopType, computeRoute, getAssumptions, suggest } from "@/lib/api";
 
 const RouteMap = dynamic(() => import("@/components/RouteMap"), { ssr: false });
@@ -189,6 +190,7 @@ export default function Planner() {
         ...c,
         depart_at: c.depart_at || null,
         arrive_by: c.arrive_by || null,
+        as_of: c.as_of || null,
       }, stops, optimizeOrder, originType, destinationType);
       setResult(r);
       setState("done");
@@ -376,6 +378,17 @@ export default function Planner() {
               />
             </label>
             <label>
+              Now (HH:MM)
+              <input
+                data-testid="as-of-input"
+                value={c.as_of ?? ""}
+                placeholder="real time"
+                title="Leave blank to use the real current time. Bots pin it so their results match the engine."
+                onChange={(e) => setC((p) => ({ ...p, as_of: e.target.value }))}
+                className="mt-1 w-full rounded-lg border border-zinc-200 px-2 py-1.5"
+              />
+            </label>
+            <label>
               Arrive by
               <input
                 data-testid="arrive-by-input"
@@ -479,9 +492,7 @@ export default function Planner() {
                     </div>
                   </dl>
                   <p className="mt-1 text-xs text-zinc-600">
-                    {x.depart} → {x.arrive} · walk {x.walk_m} m
-                    {x.meets_deadline !== undefined &&
-                      (x.meets_deadline ? " · makes your deadline" : ` · MISSES deadline (leave by ${x.leave_by})`)}
+                    {timingLine(x)} · walk {x.walk_m} m
                   </p>
                   {x.schedule && (
                     <ol className="mt-1 text-xs text-zinc-700" data-testid={`schedule-${x.id}`}>

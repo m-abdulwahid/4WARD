@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, Field, model_validator
 
-from . import bikeshare, fares, highways, osm, pareto, reliability, transit
+from . import bikeshare, fares, highways, osm, pareto, reliability, schedule, transit
 from .config import PARK_RIDE_LOT_TO_PLATFORM_MIN, PARKING_SEARCH_MIN, PARKING_WALK_MIN, SPEEDS_KMH, traffic_multiplier
 from .geo import haversine_km
 
@@ -33,7 +33,7 @@ PARK_RIDE_SEARCH_N = 10  # how many of the nearest real stations get a real driv
 
 
 async def _best_park_ride_station(origin: tuple[float, float], dest: tuple[float, float], hour: int,
-                                   tm: float) -> tuple[str, float, float, str] | None:
+                                   tm: float, at=None) -> tuple[str, float, float, str] | None:
     """Pick the station that actually minimizes total trip time, searched over every real TTC subway
     AND GO train station (not a hand-picked shortlist of 7) -- a true discrete optimum, not a
     nearest-neighbour guess. Bounded to the PARK_RIDE_SEARCH_N most promising-by-straight-line
@@ -45,7 +45,7 @@ async def _best_park_ride_station(origin: tuple[float, float], dest: tuple[float
 
     async def _try(s: tuple[str, float, float, str]):
         sp = (s[1], s[2])
-        d, opt = await asyncio.gather(osm.leg("drive", origin, sp), transit.rail_option(sp, dest, hour))
+        d, opt = await asyncio.gather(osm.leg("drive", origin, sp), transit.rail_option(sp, dest, hour, at=at))
         if not opt:
             return None
         total = d["duration_s"] * tm + sum(l["duration_s"] for l in opt["legs"])
@@ -58,6 +58,7 @@ async def _best_park_ride_station(origin: tuple[float, float], dest: tuple[float
 class Constraints(BaseModel):
     modes: list[str] = Field(default_factory=lambda: list(ALL_MODES))
     depart_at: str | None = None       # "HH:MM" local time, default now
+    as_of: str | None = None           # "HH:MM": treat this as the current time (the orchestrator pins it so the engine's run and every bot's page agree)
     arrive_by: str | None = None       # "HH:MM"
     park_ride_lot: str | None = None   # overrides the auto-picked "nearest lot" (see PARK_RIDE_LOTS)
     bags: int = 0
@@ -89,6 +90,20 @@ def _hhmm(s: str | None, base: datetime) -> datetime | None:
     return t
 
 
+def _now(c: "Constraints") -> datetime:
+    real = datetime.now(TORONTO)
+    return _hhmm(c.as_of, real) or real
+
+
+def _deadline(arrive_by: str | None, depart: datetime, now: datetime, backward: bool) -> datetime | None:
+    """The arrive-by clock time as a datetime. A time that has already passed today means tomorrow when we are planning
+    backwards from it (asking for "by 8:30" at 10 pm means tomorrow morning)."""
+    ab = _hhmm(arrive_by, depart)
+    if ab and backward and ab < now:
+        ab += timedelta(days=1)
+    return ab
+
+
 def _leg(mode, label, a, b, g: dict, cost=0.0, co2=0.0, dur=None, extra=None):
     return {"mode": mode, "label": label, "from": list(a), "to": list(b),
             "distance_km": g["distance_km"], "duration_s": g["duration_s"] if dur is None else dur,
@@ -106,9 +121,28 @@ def _dwell_leg(label: str, at: tuple[float, float], minutes: float, walk_minutes
 
 def _finish(cand_id: str, title: str, legs: list[dict], c: Constraints, depart: datetime, hour: int,
             transfers: int, notes: list[str], extra_cost=0.0, extra: dict | None = None) -> dict:
-    # duration_min is DOOR TO DOOR: the sum of every leg incl. walking, waits, transfers, parking and dwell legs.
-    # It is the one time definition all four bots rank by.
-    dur_s = sum(l["duration_s"] for l in legs)
+    # Time: schedule.retime() gives every leg a real start, end, wait and duration (real scheduled departures for TTC and GO,
+    # road conditions at the moment each road leg starts). duration_min is DOOR TO DOOR: first departure to last arrival,
+    # which equals the sum of every leg incl. walking, waits, transfers, parking and dwell legs. All four bots rank by it.
+    now = _now(c)
+    ab = _deadline(c.arrive_by, depart, now, backward=not c.depart_at)
+    leave_by = earliest = None
+    meets = None
+    if ab:
+        latest = schedule.latest_departure(legs, ab, now)
+        if not c.depart_at:  # backward: leave as late as still arrives on time ("leave by 7:42")
+            if latest is not None and latest >= now.replace(second=0, microsecond=0):
+                depart = latest
+                meets = True
+            else:
+                meets = False  # cannot arrive by then even leaving right now
+        leave_by = latest
+    legs, arrive = schedule.retime(legs, depart, now)
+    if ab and meets is None:
+        meets = arrive <= ab
+    if ab and not meets:
+        earliest = arrive
+    dur_s = (arrive - depart).total_seconds()
     cost = round(sum(l.get("cost", 0) for l in legs) + extra_cost, 2)
     co2 = round(sum(l.get("co2_kg", 0) for l in legs), 3)
     walk_m = round(sum(l["distance_km"] for l in legs if l["mode"] == "walk") * 1000)
@@ -122,20 +156,24 @@ def _finish(cand_id: str, title: str, legs: list[dict], c: Constraints, depart: 
         if any(l["mode"] == "subway" for l in legs) and c.avoid_stairs:
             bag -= 0.1
     bag = round(max(0.0, min(1.0, bag)), 2)
-    arrive = depart + timedelta(seconds=dur_s)
     cand = {
         "id": cand_id, "title": title, "legs": legs, "duration_min": round(dur_s / 60, 1),
         "cost": cost, "co2_kg": co2, "transfers": transfers, "walk_m": walk_m,
         "bag_friendliness": bag, "depart": depart.strftime("%H:%M"), "arrive": arrive.strftime("%H:%M"),
-        "notes": notes, "available": True,
+        "depart_iso": depart.isoformat(timespec="seconds"), "arrive_iso": arrive.isoformat(timespec="seconds"),
+        "timezone": "America/Toronto", "notes": notes, "available": True,
     }
     if c.max_walk_m is not None and walk_m > c.max_walk_m:
         cand["notes"] = notes + [f"Walking {walk_m} m exceeds your {c.max_walk_m} m limit"]
         cand["violates"] = ["max_walk"]
-    ab = _hhmm(c.arrive_by, depart)
     if ab:
-        cand["meets_deadline"] = arrive <= ab
-        cand["leave_by"] = (ab - timedelta(seconds=dur_s)).strftime("%H:%M")
+        cand["meets_deadline"] = bool(meets)
+        cand["deadline_iso"] = ab.isoformat(timespec="seconds")
+        if leave_by is not None:
+            cand["leave_by"] = leave_by.strftime("%H:%M")
+        if earliest is not None:
+            cand["earliest_arrival"] = earliest.strftime("%H:%M")
+            cand["notes"] = list(cand["notes"]) + [f"Can't arrive by {ab.strftime('%H:%M')}: the earliest arrival is {earliest.strftime('%H:%M')}"]
     cand.update(extra or {})
     # Hard rule: no walking or cycling leg may run along a controlled-access highway (DVP, Gardiner, 400-series, QEW).
     for l in legs:
@@ -249,8 +287,15 @@ def _unavailable(cid, title, why):
 async def plan(origin: tuple[float, float], dest: tuple[float, float], c: Constraints) -> dict:
     # Must be Toronto wall-clock time, not server-local: on a UTC host (Railway) datetime.now() is
     # 4-5 hours off, which silently breaks rush-hour traffic_multiplier() and reliability dow/hour matching.
-    now = datetime.now(TORONTO)
+    now = _now(c)
     depart = _hhmm(c.depart_at, now) or now
+    # When is the trip actually travelled? Transit paths are chosen by which lines run at that time. Planning backwards from a
+    # deadline means travelling shortly before it, not right now.
+    path_at = depart
+    if c.arrive_by and not c.depart_at:
+        dl = _deadline(c.arrive_by, depart, now, backward=True)
+        if dl:
+            path_at = max(depart, dl - timedelta(minutes=45))
     hour = depart.hour
     tm = traffic_multiplier(hour)
     out: list[dict] = []
@@ -310,7 +355,8 @@ async def plan(origin: tuple[float, float], dest: tuple[float, float], c: Constr
             park = fares.parking_cost(dest[0], dest[1], c.stay_hours)
             prob = fares.parking_find_probability(dest[0], dest[1], hour)
             co2 = fares.emissions_kg("ev" if c.ev else "car", g["distance_km"])
-            lg = _leg("car", f"Drive ({'EV' if c.ev else 'gas'})", origin, dest, g, fuel + park, co2, dur)
+            lg = _leg("car", f"Drive ({'EV' if c.ev else 'gas'})", origin, dest, g, fuel + park, co2, dur,
+                      {"timing": "road", "base_s": g["duration_s"]})
             lg["cost_breakdown"] = {"fuel_or_charge_and_wear": fuel, "parking": park}
             zone = "downtown" if fares.in_downtown(dest[0], dest[1]) else "other"
             park_min = PARKING_SEARCH_MIN[zone] + PARKING_WALK_MIN[zone]
@@ -325,7 +371,7 @@ async def plan(origin: tuple[float, float], dest: tuple[float, float], c: Constr
             g = await osm.leg("drive", origin, dest)
             dur = g["duration_s"] * tm  # no pickup wait, no parking search: someone you know drives you door to door
             lg = _leg("car", "Lift from someone else (no fare, no parking for you)", origin, dest, g, 0.0,
-                      fares.emissions_kg("car", g["distance_km"]), dur)
+                      fares.emissions_kg("car", g["distance_km"]), dur, {"timing": "road", "base_s": g["duration_s"]})
             out.append(_finish(LIFT, "Lift", [lg], c, depart, hour, 0,
                                ["Someone else drives you and their car does not continue with you; you pay nothing and no parking",
                                 "CO2 counts the whole car trip (ESTIMATE)", f"Traffic factor x{tm} for {hour:02d}:00 (typical-day estimate, not live)"]))
@@ -334,13 +380,14 @@ async def plan(origin: tuple[float, float], dest: tuple[float, float], c: Constr
             g = await osm.leg("drive", origin, dest)
             dur = g["duration_s"] * tm + 4 * 60  # + pickup wait
             fare = fares.rideshare_cost(g["distance_km"], dur / 60)
-            lg = _leg("car", "Rideshare / taxi (fare estimated)", origin, dest, g, fare, fares.emissions_kg("car", g["distance_km"]), dur)
+            lg = _leg("car", "Rideshare / taxi (fare estimated)", origin, dest, g, fare, fares.emissions_kg("car", g["distance_km"]), dur,
+                      {"timing": "road", "base_s": g["duration_s"], "fixed_extra_s": 4 * 60})
             out.append(_finish("rideshare", "Rideshare", [lg], c, depart, hour, 0,
                                [f"Fare ${fare:.2f} is an ESTIMATE (no surge pricing modeled)", "Door to door, easy with bags"]))
 
         elif m == "transit":
-            rail = await transit.rail_option(origin, dest, hour)
-            low = await transit.rail_option(origin, dest, hour, walk_weight=3.0)
+            rail = await transit.rail_option(origin, dest, hour, at=path_at)
+            low = await transit.rail_option(origin, dest, hour, walk_weight=3.0, at=path_at)
             options = [rail]
             def _walk(o):
                 return sum(l["distance_km"] for l in o["legs"] if l["mode"] == "walk")
@@ -363,14 +410,14 @@ async def plan(origin: tuple[float, float], dest: tuple[float, float], c: Constr
 
         elif m == "park_ride":
             chosen_lot = next((p for p in PARK_RIDE_LOTS if p[0] == c.park_ride_lot), None) if c.park_ride_lot else None
-            lot = chosen_lot or await _best_park_ride_station(origin, dest, hour, tm)
+            lot = chosen_lot or await _best_park_ride_station(origin, dest, hour, tm, at=path_at)
             if not lot:
                 out.append(_unavailable("park_ride", "Park & ride", "No usable park & ride station found"))
                 continue
             name, lat, lon, kind = lot
             lp = (lat, lon)
             d1 = await osm.leg("drive", origin, lp)
-            opt = await transit.rail_option(lp, dest, hour)
+            opt = await transit.rail_option(lp, dest, hour, at=path_at + timedelta(seconds=d1["duration_s"] * tm))
             if not opt:
                 out.append(_unavailable("park_ride", "Park & ride", f"No transit option from {name}"))
                 continue
@@ -378,7 +425,8 @@ async def plan(origin: tuple[float, float], dest: tuple[float, float], c: Constr
             lot_fee = float(fares.A["go_lot_parking_day" if kind == "go_train" else "ttc_lot_parking_day"]["value"])
             drive_cost = fares.driving_cost(d1["distance_km"], c.ev) + lot_fee
             legs = [_leg("car", f"Drive to {name}", origin, lp, d1, drive_cost,
-                         fares.emissions_kg("ev" if c.ev else "car", d1["distance_km"]), dur),
+                         fares.emissions_kg("ev" if c.ev else "car", d1["distance_km"]), dur,
+                         {"timing": "road", "base_s": d1["duration_s"]}),
                     _dwell_leg(f"Park and walk to the {name} platform (estimated)", lp, PARK_RIDE_LOT_TO_PLATFORM_MIN, PARK_RIDE_LOT_TO_PLATFORM_MIN)] + opt["legs"][1:]
             transit_legs = legs[2:]
             transit_min = sum(l["duration_s"] for l in transit_legs) / 60

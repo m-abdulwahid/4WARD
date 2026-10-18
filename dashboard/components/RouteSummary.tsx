@@ -4,6 +4,7 @@ import type { Candidate } from "@/lib/api";
 import { legColor, legMode } from "@/lib/modes";
 import ModeBadge from "@/components/ModeBadge";
 import LegTimeline from "@/components/LegTimeline";
+import { timingLine } from "@/lib/timing";
 
 type Bot = { key: string; name: string; color: string };
 
@@ -102,8 +103,7 @@ export default function RouteSummary({
         ))}
       </dl>
       <p className="mt-1 text-[11px] text-zinc-500">
-        {route.depart} to {route.arrive}
-        {deadlineNote ? ` · ${deadlineNote}` : route.meets_deadline !== undefined && (route.meets_deadline ? " · makes your deadline" : ` · misses your deadline (leave by ${route.leave_by})`)}
+        {timingLine(route, deadlineNote)} · Toronto time
       </p>
 
       {legs && (

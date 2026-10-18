@@ -23,7 +23,7 @@ TORONTO = ZoneInfo("America/Toronto")
 # The only constraint fields the planner page can express; the shared plan uses exactly these so the engine's
 # candidate set and the page every bot operates are the same computation.
 UI_CONSTRAINTS = ("bags", "no_presto", "has_car", "ev", "has_bike", "has_ebike", "avoid_stairs", "depart_at", "arrive_by",
-                  "start_in_car", "plan_car_return", "car_needed_after")
+                  "start_in_car", "plan_car_return", "car_needed_after", "as_of")
 
 
 async def _emit(cb: Emit | None, ev: dict) -> None:
@@ -130,8 +130,15 @@ async def run_all(prompt: str, emit: Emit | None = None, base_url: str | None = 
     if scope_error:
         return {"error": scope_error, "parsed": user, "results": []}
     # Pin the departure to one clock time so the engine's run and every bot's page compute identical times.
-    if not user["constraints"].get("depart_at"):
-        user["constraints"]["depart_at"] = datetime.now(TORONTO).strftime("%H:%M")
+    c = user["constraints"]
+    is_trip = bool(places["stops"] or places["origin"].get("type") or places["destination"].get("type") or c.get("start_in_car") or c.get("car_needed_after"))
+    # A plain trip with a deadline and no departure time is planned BACKWARDS: each route leaves as late as still arrives on
+    # time ("leave by 7:42"), so nothing is pinned. Everything else is planned forwards from one pinned clock time.
+    if not c.get("depart_at") and not (c.get("arrive_by") and not is_trip):
+        c["depart_at"] = datetime.now(TORONTO).strftime("%H:%M")
+    # Pin "now" too, so the engine's run and every bot's page agree on it (it matters for a deadline that cannot be met:
+    # the earliest arrival depends on when you could leave).
+    c["as_of"] = datetime.now(TORONTO).strftime("%H:%M")
     try:
         plan = await shared_plan(user, places)
         shared = plan["candidates"]

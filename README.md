@@ -56,7 +56,8 @@ backend/   FastAPI: /route, /run (+ /ws/run/{id}), /insights/*, fares, transit r
 bots/      Playwright runner, Gemini + rule brains, profiles/scoring, prompt parser, orchestrator, e2e
 dashboard/ Next.js: / (prompt + 2x2 live bots + shared map + comparison + Tiger Data charts), /planner (what bots operate)
 db/        schema.sql (hypertables + continuous aggregates for Tiger Data)
-data/      transit_network.json (GTFS-derived), highways.json (OSM controlled-access highways and exits, rebuild with
+data/      transit_network.json (GTFS-derived), timetable.json (real TTC and GO scheduled departures, rebuild with
+           `python -m backend.build_timetable` after refreshing the GTFS folders), highways.json (OSM controlled-access highways and exits, rebuild with
            `python -m backend.build_highways`), route/geocode caches, replay snapshot
 tests/     fares (hand-checked), scoring, prompt parsing, brain fallback
 ```

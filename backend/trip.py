@@ -33,8 +33,8 @@ from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, field_validator
 
-from . import fares, highways, osm, pareto, planner
-from .config import PARKING_WALK_MIN, traffic_multiplier
+from . import fares, highways, osm, pareto, planner, schedule
+from .config import LEAVE_BY_SEARCH_MIN, PARKING_WALK_MIN, traffic_multiplier
 from .geo import haversine_km
 
 TORONTO = ZoneInfo("America/Toronto")
@@ -72,6 +72,14 @@ class Stop(BaseModel):
 def _clock(s: str, base: datetime) -> datetime:
     h, m = s.split(":")[:2]
     return base.replace(hour=int(h), minute=int(m), second=0, microsecond=0)
+
+
+def _deadline(arrive_by: str | None, depart: datetime) -> datetime | None:
+    """The arrive-by time; one that is already behind the departure means tomorrow."""
+    if not arrive_by:
+        return None
+    d = _clock(arrive_by, depart)
+    return d + timedelta(days=1) if d < depart else d
 
 
 def _hm(dt: datetime) -> str:
@@ -232,9 +240,24 @@ def _combine(points: list[dict], leg_sets: list[list[dict]], constraints: planne
     `returns` maps a car location key to the non-car options for getting back to it from the destination."""
     n = len(leg_sets)
     start = (points[0]["lat"], points[0]["lon"])
-    deadline = _clock(constraints.arrive_by, depart) if constraints.arrive_by else None
+    deadline = _deadline(constraints.arrive_by, depart)
     dest = (points[-1]["lat"], points[-1]["lon"])
     trips: list[dict] = []
+    real_now = planner._now(constraints)
+    walkbacks: dict[int, dict] = {}
+    timed_cache: dict[tuple, dict] = {}
+
+    def timed(c: dict, at: datetime) -> dict:
+        """The leg option re-timed to the moment it really starts (real departures, road conditions then)."""
+        key = (id(c), int(at.timestamp() // 60))
+        hit = timed_cache.get(key)
+        if hit is None:
+            legs, arr = schedule.retime(c["legs"], at, real_now)
+            hit = dict(c)
+            hit["legs"] = legs
+            hit["duration_min"] = round((arr - at).total_seconds() / 60, 1)
+            timed_cache[key] = hit
+        return hit
 
     def walk(i: int, now: datetime, picks: list[dict], st: dict, sched: list[dict], bad: list[str]) -> None:
         if len(trips) > MAX_COMBOS:
@@ -250,7 +273,11 @@ def _combine(points: list[dict], leg_sets: list[list[dict]], constraints: planne
                 continue
             if i > 0 and points[i]["type"] == "via" and _eff_id(c0) != _eff_id(picks[-1]):
                 continue  # passing through: same mode on both sides
-            c = _with_walkback(c0) if _eff_id(c0) in ("drive", "park_ride") and not c0.get("fetch_car_at") and not st["at_hand"] and not st["in_car"] else c0
+            if _eff_id(c0) in ("drive", "park_ride") and not c0.get("fetch_car_at") and not st["at_hand"] and not st["in_car"]:
+                if id(c0) not in walkbacks:
+                    walkbacks[id(c0)] = _with_walkback(c0)
+                c0 = walkbacks[id(c0)]
+            c = timed(c0, now)
             arrive = now + timedelta(minutes=c["duration_min"])
             wait, viol = 0.0, list(bad)
             if dest_pt.get("window"):
@@ -267,7 +294,52 @@ def _combine(points: list[dict], leg_sets: list[list[dict]], constraints: planne
             walk(i + 1, depart_next, picks + [c], new_st, sched + [entry], viol)
 
     walk(0, depart, [], _init_state(constraints, start), [], [])
+    _attach_leave_by(points, trips, deadline, depart, real_now)
     return trips
+
+
+def _arrival(points: list[dict], picks: list[dict], depart: datetime, now: datetime) -> datetime:
+    """Replay a chosen sequence of leg options from `depart`: real departures, stays and meeting windows. Returns the arrival
+    at the destination (a return leg to the car, if any, comes after it and is not part of the deadline)."""
+    t = depart
+    for i, c in enumerate(picks):
+        _, t = schedule.retime(c["legs"], t, now)
+        nxt = points[i + 1]
+        if nxt.get("window"):
+            ws = _clock(nxt["window"][0], depart)
+            if t < ws:
+                t = ws
+        if i + 1 < len(points) - 1:
+            t = t + timedelta(minutes=nxt["dwell_min"])
+    return t
+
+
+def _latest_leave(points: list[dict], picks: list[dict], deadline: datetime, depart: datetime, now: datetime) -> datetime | None:
+    """Latest whole-minute departure that still reaches the destination by `deadline`, or None."""
+    return schedule.latest_boundary(lambda d: _arrival(points, picks, d, now) <= deadline, deadline - timedelta(minutes=LEAVE_BY_SEARCH_MIN), deadline)
+
+def _attach_leave_by(points: list[dict], trips: list[dict], deadline: datetime | None, depart: datetime, now: datetime) -> None:
+    """Exact "leave by" for the trips that matter. With very many trips, the best few per objective get the exact search and
+    the rest keep the simple estimate (deadline minus duration)."""
+    if not deadline:
+        for c in trips:
+            c.pop("_picks", None)
+        return
+    exact = trips
+    if len(trips) > 1500:
+        exact = []
+        for key in ("duration_min", "cost", "co2_kg"):
+            exact += sorted(trips, key=lambda c: c[key])[:80]
+        exact += sorted(trips, key=lambda c: -(c.get("reliability") or {}).get("reliability_pct", -1))[:80]
+    chosen = {id(c) for c in exact}
+    for c in trips:
+        picks = c.pop("_picks", None)
+        if picks and id(c) in chosen:
+            leave = _latest_leave(points, picks, deadline, depart, now)
+            if leave is None:
+                c.pop("leave_by", None)
+            else:
+                c["leave_by"] = _hm(leave)
 
 
 def _finish_trip(points, picks, sched, bad, depart, finish, deadline, prefix, st, constraints, dest, returns, trips) -> None:
@@ -322,6 +394,7 @@ def _build(points, picks, sched, bad, depart, finish, deadline, order_prefix, st
     total_min = (arrive_dt - depart).total_seconds() / 60
     rels = [c["reliability"] for c in picks if c.get("reliability")]
     cand = {
+        "_picks": picks,
         "id": order_prefix + "|".join(c["id"] for c in picks) + (f"|return:{ret['id']}" if ret else ""),
         "title": " then ".join(c["title"] for c in picks_all),
         "available": True, "legs": legs, "schedule": schedule,
@@ -430,6 +503,7 @@ async def _exit_leg(origin: dict, exit_pt: dict, depart: datetime) -> dict:
             "bag_friendliness": 1.0, "notes": [f"You start in your car on {origin['highway']}: first drive to the next valid exit before any other mode (ESTIMATE of the exit)"],
             "legs": [{"mode": "car", "label": f"Drive on {origin['highway']} to {exit_pt['name']}", "from": [origin["lat"], origin["lon"]],
                       "to": [exit_pt["lat"], exit_pt["lon"]], "distance_km": g["distance_km"], "duration_s": dur, "geometry": g["geometry"],
+                      "timing": "road", "base_s": g["duration_s"],
                       "provenance": g.get("provenance", "estimated"), "cost": fares.driving_cost(g["distance_km"], False),
                       "co2_kg": fares.emissions_kg("car", g["distance_km"])}]}
 
@@ -490,7 +564,7 @@ async def _return_options(points: list[dict], leg_sets: list[list[dict]], constr
 
 
 async def _plan_trip(origin, stops, destination, constraints, optimize_order) -> dict:
-    now = datetime.now(TORONTO)
+    now = planner._now(constraints)
     depart = _clock(constraints.depart_at, now) if constraints.depart_at else now.replace(second=0, microsecond=0)
 
     def point(p: dict, idx: int, kind: str) -> dict:

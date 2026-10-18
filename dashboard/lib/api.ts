@@ -27,6 +27,11 @@ export type Leg = {
   co2_kg?: number;
   color?: string;
   cand_id?: string; // multi-stop: id of the single-leg option this leg came from (e.g. park_ride)
+  depart_at?: string; // HH:MM Toronto time this leg starts
+  arrive_at?: string;
+  wait_s?: number; // waiting for a vehicle or a pickup before the leg moves
+  scheduled?: boolean; // transit leg timed from a real GTFS departure (false/absent: ESTIMATED headway)
+  traffic_source?: string;
   segment?: number; // multi-stop: which leg of the trip (A to B is 0, B to C is 1, ...) this leg belongs to
 };
 
@@ -70,7 +75,12 @@ export type Candidate = {
   arrive?: string;
   notes?: string[];
   meets_deadline?: boolean;
-  leave_by?: string;
+  leave_by?: string; // the latest departure that still arrives by the deadline (Toronto time)
+  earliest_arrival?: string; // when it cannot make the deadline: the earliest arrival
+  deadline_iso?: string;
+  depart_iso?: string;
+  arrive_iso?: string;
+  timezone?: string;
   violates?: string[];
   reliability?: { reliability_pct: number; history_days: number; basis: string };
   pareto_optimal?: boolean;
@@ -93,6 +103,7 @@ export type Constraints = {
   modes: string[];
   depart_at?: string | null;
   arrive_by?: string | null;
+  as_of?: string | null; // pinned "current time" (HH:MM) so bots and the engine agree; blank = really now
   park_ride_lot?: string | null;
   bags: number;
   no_presto: boolean;

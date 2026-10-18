@@ -117,9 +117,13 @@ def build_source(src: dict) -> list[dict]:
 def main() -> None:
     all_lines = []
     labels = []
+    old = json.loads(OUT.read_text())["lines"] if OUT.exists() else []
     for src in SOURCES:
         if not (src["dir"] / "routes.txt").exists():
-            print(f"skip {src['label']}: no GTFS at {src['dir']}")
+            # raw GTFS not on this machine: keep that agency's lines from the existing network instead of dropping them
+            keep = [l for l in old if (l["route_id"].startswith(src["prefix"]) if src["prefix"] else not l["route_id"].startswith(("GO_", "YRT_", "DRT_", "MIWAY_")))]
+            all_lines.extend(keep)
+            print(f"{src['label']}: no GTFS at {src['dir']}; kept {len(keep)} existing lines")
             continue
         lines = build_source(src)
         all_lines.extend(lines)

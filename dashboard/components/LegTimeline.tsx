@@ -7,7 +7,10 @@ function LegRow({ leg, route, last }: { leg: Leg; route: Candidate; last: boolea
   const color = legColor(leg, mode);
   return (
     <li className="flex gap-2">
-      <span className="w-14 shrink-0 pt-0.5 text-right text-xs whitespace-nowrap tabular-nums leading-5 text-zinc-500">{Math.round(leg.duration_s / 60)} min</span>
+      <span className="w-14 shrink-0 pt-0.5 text-right text-xs whitespace-nowrap tabular-nums leading-5 text-zinc-500">
+        {leg.depart_at && <span className="block font-semibold text-zinc-700">{leg.depart_at}</span>}
+        {Math.round(leg.duration_s / 60)} min
+      </span>
       <span className="flex w-6 shrink-0 flex-col items-center">
         <ModeBadge mode={mode} color={color} />
         {!last && (
@@ -20,7 +23,10 @@ function LegRow({ leg, route, last }: { leg: Leg; route: Candidate; last: boolea
         <span className="block text-[11px] font-semibold text-zinc-500">{MODES[mode].label}</span>
         {leg.label}
         {leg.cost ? <span className="text-zinc-500"> · ${leg.cost.toFixed(2)}</span> : null}
-        {leg.provenance === "estimated" && <span className="ml-1 rounded bg-zinc-100 px-1 text-[10px] text-zinc-600">estimated</span>}
+        {(leg.wait_s ?? 0) >= 60 && <span className="text-zinc-500" data-testid="leg-wait"> · waits {Math.round((leg.wait_s ?? 0) / 60)} min{leg.scheduled ? " for the next departure" : ""}</span>}
+        {leg.arrive_at && <span className="text-zinc-500"> · arrives {leg.arrive_at}</span>}
+        {leg.scheduled && <span className="ml-1 rounded bg-emerald-50 px-1 text-[10px] text-emerald-800">scheduled</span>}
+        {/estimat/i.test(leg.provenance ?? "") && <span className="ml-1 rounded bg-amber-50 px-1 text-[10px] text-amber-900">ESTIMATED</span>}
       </span>
     </li>
   );

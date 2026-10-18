@@ -57,6 +57,13 @@ PARKING_SEARCH_MIN = {"downtown": 8.0, "other": 3.0}
 PARKING_WALK_MIN = {"downtown": 4.0, "other": 2.0}
 PARK_RIDE_LOT_TO_PLATFORM_MIN = 4.0
 
+# Time accuracy (backend/schedule.py). All values are settings you can change; they are shown as ESTIMATES in the UI.
+BOARDING_BUFFER_S = 60     # arrive at a stop this long before the vehicle you plan to catch (first boarding)
+TRANSFER_BUFFER_S = 60     # same margin for every boarding after a transfer, on top of the transfer walk
+REALTIME_HORIZON_MIN = 30  # a departure within this long from now uses OBSERVED conditions; later ones use typical ones
+REALTIME_MAX_AGE_S = 300   # an observed delay older than this is not used
+LEAVE_BY_SEARCH_MIN = 300  # how far back from the deadline to look for the latest workable departure
+
 # "Meet someone at X at 6": arriving early waits; arriving up to this many minutes late is still on time (ASSUMPTION, verify).
 MEET_WINDOW_GRACE_MIN = 5
 

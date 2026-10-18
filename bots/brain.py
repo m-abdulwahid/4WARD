@@ -135,7 +135,7 @@ class RuleBrain:
                 if ctl and (ctl.get("pressed") == "true") != bool(c.get(f)):
                     return {"action": "click", "testid": f"toggle-{f}", "reason": f"set constraint {f}={bool(c.get(f))}"}
             for tid, want in (("bags-input", str(c.get("bags", 0))), ("depart-at-input", c.get("depart_at") or ""),
-                              ("arrive-by-input", c.get("arrive_by") or "")):
+                              ("arrive-by-input", c.get("arrive_by") or ""), ("as-of-input", c.get("as_of") or "")):
                 ctl = _control(page, tid)
                 if ctl and (ctl.get("value") or "") != want:
                     return {"action": "type", "testid": tid, "text": want, "reason": f"set {tid}"}
