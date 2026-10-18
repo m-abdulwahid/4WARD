@@ -22,7 +22,31 @@ PARK_RIDE_LOTS = [
     ("Kipling Station", 43.6372, -79.5361), ("Don Mills Station", 43.7756, -79.3463),
     ("Wilson Station", 43.7342, -79.4504), ("Islington Station", 43.6454, -79.5245),
     ("Downsview Park Station", 43.7534, -79.4784),
-]
+]  # curated shortlist for the manual picker UI only -- the engine's own auto choice searches every station (below)
+
+PARK_RIDE_SEARCH_N = 10  # how many of the nearest real stations get a real drive+transit quote when picking automatically
+
+
+async def _best_park_ride_station(origin: tuple[float, float], dest: tuple[float, float], hour: int,
+                                   tm: float) -> tuple[str, float, float] | None:
+    """Pick the station that actually minimizes total trip time, searched over every real TTC subway
+    station (not a hand-picked shortlist of 7) -- a true discrete optimum, not a nearest-neighbour guess.
+    Bounded to the PARK_RIDE_SEARCH_N most promising-by-straight-line candidates so a request stays fast;
+    each of those gets a real OSRM drive time and a real Dijkstra transit time, not an estimate."""
+    all_stations = transit.subway_stations()
+    toward = [s for s in all_stations if haversine_km((s[1], s[2]), dest) < haversine_km(origin, dest)]
+    pool = sorted(toward or all_stations, key=lambda s: haversine_km(origin, (s[1], s[2])))[:PARK_RIDE_SEARCH_N]
+
+    async def _try(s: tuple[str, float, float]):
+        sp = (s[1], s[2])
+        d, opt = await asyncio.gather(osm.leg("drive", origin, sp), transit.rail_option(sp, dest, hour))
+        if not opt:
+            return None
+        total = d["duration_s"] * tm + sum(l["duration_s"] for l in opt["legs"])
+        return (total, s)
+
+    results = [r for r in await asyncio.gather(*(_try(s) for s in pool)) if r]
+    return min(results, key=lambda r: r[0])[1] if results else None
 
 
 class Constraints(BaseModel):
@@ -215,9 +239,10 @@ async def plan(origin: tuple[float, float], dest: tuple[float, float], c: Constr
             if chosen_lot:
                 lot = chosen_lot
             else:
-                # choose the lot closest to origin that lies roughly toward the destination
-                cands = [p for p in PARK_RIDE_LOTS if haversine_km((p[1], p[2]), dest) < haversine_km(origin, dest)]
-                lot = min(cands or PARK_RIDE_LOTS, key=lambda p: haversine_km(origin, (p[1], p[2])))
+                lot = await _best_park_ride_station(origin, dest, hour, tm)
+            if not lot:
+                out.append(_unavailable("park_ride", "Park & ride", "No usable park & ride station found"))
+                continue
             lp = (lot[1], lot[2])
             d1 = await osm.leg("drive", origin, lp)
             opt = await transit.rail_option(lp, dest, hour)

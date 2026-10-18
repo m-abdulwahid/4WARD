@@ -29,6 +29,29 @@ def test_unavailable_and_no_routes():
     assert scoring.best("cheap", [{"id": "x", "available": False}], {}) is None
 
 
+def test_reliability_breaks_a_near_tie_toward_the_more_reliable_option():
+    """Two near-identical-time options for 'fastest': the one Tiger Data shows as flaky loses,
+    but only once there's enough history behind that signal to trust it."""
+    fast_unreliable = {**cand("fast_flaky", 20, 5, 1), "reliability": {"reliability_pct": 40, "history_days": 14}}
+    fast_reliable = {**cand("fast_solid", 21, 5, 1), "reliability": {"reliability_pct": 95, "history_days": 14}}
+    assert scoring.best("fastest", [fast_unreliable, fast_reliable], {"bags": 0})["id"] == "fast_solid"
+
+
+def test_reliability_barely_matters_with_thin_history():
+    """One matching historical day is not enough signal to flip a close call -- the raw time/cost
+    difference should still decide it, exactly like before reliability existed."""
+    fast_flaky_thin_history = {**cand("fast_flaky", 20, 5, 1), "reliability": {"reliability_pct": 0, "history_days": 1}}
+    slightly_slower = {**cand("slightly_slower", 21, 5, 1)}
+    assert scoring.best("fastest", [fast_flaky_thin_history, slightly_slower], {"bags": 0})["id"] == "fast_flaky"
+
+
+def test_reliability_penalty_pure_function():
+    assert scoring._reliability_penalty({}) == 0.0
+    assert scoring._reliability_penalty({"reliability": {"reliability_pct": 100, "history_days": 30}}) == 0.0
+    assert scoring._reliability_penalty({"reliability": {"reliability_pct": 50, "history_days": 7}}) == pytest.approx(0.25)
+    assert scoring._reliability_penalty({"reliability": {"reliability_pct": 50, "history_days": 28}}) == pytest.approx(0.5)
+
+
 def test_parse_rules():
     r = nlp.parse_rules("Get me from York University to Union Station by 5pm. I have 2 big bags, no Presto card, but I have my car.")
     assert (r["origin"], r["destination"]) == ("York University", "Union Station")

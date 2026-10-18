@@ -56,6 +56,24 @@ def _stop_ll(lines, node):
     return (s["lat"], s["lon"])
 
 
+@lru_cache(maxsize=1)
+def subway_stations() -> list[tuple[str, float, float]]:
+    """Every real TTC subway station from the GTFS-derived line graph, one point per station (its
+    platforms, e.g. "Bloor Station - Eastbound Platform" / "- Westbound Platform", averaged together).
+    Used to search interchange points (park & ride, future ride-hail-to-hub) over every real station
+    instead of a short hand-picked list."""
+    lines, nodes, _, _ = _net()
+    agg: dict[str, list[tuple[float, float]]] = {}
+    for li, si in nodes:
+        ln = lines[li]
+        if ln.get("type") != "subway":
+            continue
+        s = ln["stops"][si]
+        name = s["name"].split(" - ")[0].strip()
+        agg.setdefault(name, []).append((s["lat"], s["lon"]))
+    return [(name, sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts)) for name, pts in agg.items()]
+
+
 def _rail_route(a, b, walk_weight: float = 1.0):
     lines, nodes, index, transfers = _net()
     # access candidates
