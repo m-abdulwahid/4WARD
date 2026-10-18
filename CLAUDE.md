@@ -1,10 +1,10 @@
 # 4WARD
 
-Toronto trip planner. A user types a trip in plain language ("UTSC to King and Spadina by 8:30, two suitcases, no Presto card"). Four agents, each in its own Steel cloud browser and each chasing a different goal, operate our map dashboard in parallel. The user sees four routes side by side and picks one.
+Greater Toronto Area trip planner. A user types a trip in plain language ("UTSC to King and Spadina by 8:30, two suitcases, no Presto card"). Four agents, each in its own Steel cloud browser and each chasing a different goal, operate our map dashboard in parallel. The user sees four routes side by side and picks one.
 
 Tagline: "Four routes. One trip. Pick your way forward."
 
-Scope is Toronto only. Hackathon project, so priority one is a demo that works every time.
+Scope is the GTA: Toronto plus Durham, York, Peel and Halton regions (TTC subway/streetcar/bus plus GO Transit rail), not GO's full reach into Hamilton, Niagara, Waterloo or Simcoe. Hackathon project, so priority one is a demo that works every time.
 
 ## The idea in one sentence
 

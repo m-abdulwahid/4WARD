@@ -9,6 +9,7 @@ __pycache__
 data/*.log
 data/*.err.log
 data/gtfs/
+data/gtfs_go/
 data/completegtfs.zip
 data/screenshots/
 data/geocode_cache.json

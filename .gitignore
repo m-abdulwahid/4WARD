@@ -4,6 +4,7 @@ __pycache__/
 node_modules/
 .next/
 data/gtfs/
+data/gtfs_go/
 data/completegtfs.zip
 data/screenshots/
 data/*.log

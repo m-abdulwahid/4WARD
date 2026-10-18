@@ -24,12 +24,16 @@ ASSUMPTIONS = {
     "rideshare_per_min": {"value": 0.40, "unit": "CAD/min", "note": "Rideshare time rate (estimated)"},
     "ttc_lot_parking_day": {"value": 6.00, "unit": "CAD", "note": "TTC commuter lot daily parking (estimated, verify)"},
     "own_ebike_cost_per_km": {"value": 0.02, "unit": "CAD/km", "note": "Electricity + battery wear (estimated)"},
+    "go_fare_base": {"value": 3.90, "unit": "CAD", "note": "GO Transit PRESTO base fare (ESTIMATE -- real GO fares are distance-banded and change, verify)"},
+    "go_fare_per_km": {"value": 0.22, "unit": "CAD/km", "note": "GO Transit PRESTO approx. rate beyond the base fare (ESTIMATE, verify)"},
+    "go_lot_parking_day": {"value": 0.00, "unit": "CAD", "note": "Most GO lots are currently free for PRESTO riders (verify before a demo, this changes)"},
 }
 
 # grams CO2e per passenger-km (estimated, lifecycle-ish public figures)
 EMISSIONS_G_PER_KM = {
     "walk": 0, "bike": 0, "bikeshare": 0, "ebike": 8, "bikeshare_ebike": 8,
     "subway": 30, "lrt_streetcar": 40, "bus": 90, "car": 192, "ev": 50,
+    "go_train": 40,  # diesel commuter rail: worse than electric subway, far better than driving alone
 }
 
 # average speeds km/h (estimated); foot/bike/car legs come from OSM routing durations when online
@@ -49,4 +53,7 @@ def traffic_multiplier(hour: int) -> float:
 
 DOWNTOWN_BBOX = (43.630, 43.675, -79.420, -79.360)  # lat_min, lat_max, lon_min, lon_max
 
-TORONTO_BBOX = (43.58, 43.86, -79.64, -79.12)
+# Toronto + Durham, York, Peel, Halton regions (the conventional GTA, not GO's full reach into
+# Hamilton/Niagara/Waterloo/Simcoe -- chosen to comfortably include Oshawa, Milton, Newmarket and
+# Georgetown while excluding Hamilton-area and Barrie-area GO stations just south/north of those).
+GTA_BBOX = (43.30, 44.10, -80.05, -78.70)

@@ -30,8 +30,8 @@ const RouteMap = dynamic(() => import("@/components/RouteMap"), { ssr: false });
 function friendlyError(msg: string): string {
   if (/origin and destination/i.test(msg))
     return "We couldn't tell where you're starting and where you're going. Write it as \u201cA to B\u201d, for example \u201cYork U to CN Tower\u201d, then press Plan my trip again.";
-  if (/toronto area/i.test(msg))
-    return `${msg} Try a street address, an intersection, or a landmark inside the city, then press Plan my trip again.`;
+  if (/\bgta\b/i.test(msg))
+    return `${msg} Try a street address, an intersection, or a landmark inside the GTA, then press Plan my trip again.`;
   if (/failed to fetch|networkerror|load failed|refused the run/i.test(msg))
     return "We can't reach the 4WARD backend right now. Check that it is running (start.ps1), then press Plan my trip again.";
   if (/lost connection/i.test(msg)) return "The connection to the 4WARD backend dropped while the bots were working. Check that it is running, then press Plan my trip again.";
@@ -283,7 +283,7 @@ export default function Home() {
             // the user asked for this: no error banner, just let them see or edit what's there
           } else if (ev.result?.error) {
             setError(friendlyError(ev.result.error));
-            if (/origin and destination|toronto area/i.test(ev.result.error)) backToPrompt();
+            if (/origin and destination|\bgta\b/i.test(ev.result.error)) backToPrompt();
           }
           ws.close();
         }
@@ -663,7 +663,7 @@ export default function Home() {
                 className="w-full min-h-[7.5rem] shrink-0 resize-y rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-sm leading-relaxed focus:border-zinc-400 focus:bg-white focus:outline-none"
               />
               <p id="prompt-hint" data-testid="prompt-hint" className="-mt-1 text-xs leading-relaxed text-zinc-600">
-                <span className="font-semibold text-zinc-800">Try your own.</span> Short is fine (&ldquo;York U to CN Tower&rdquo;). Places must be in Toronto. 4WARD understands a deadline (&ldquo;by 6pm&rdquo;), bags, a budget (&ldquo;budget $10&rdquo;), no Presto card, a car or electric car, your bike or e-bike, and stairs or a stroller (step-free access is not checked yet).
+                <span className="font-semibold text-zinc-800">Try your own.</span> Short is fine (&ldquo;York U to CN Tower&rdquo;). Places must be in the GTA (Toronto, Durham, York, Peel or Halton). 4WARD understands a deadline (&ldquo;by 6pm&rdquo;), bags, a budget (&ldquo;budget $10&rdquo;), no Presto card, a car or electric car, your bike or e-bike, and stairs or a stroller (step-free access is not checked yet).
               </p>
               <ExampleTrips
                 current={prompt}
@@ -748,13 +748,13 @@ export default function Home() {
             )}
             {places && (
               <div data-testid="places-check" className="rounded-xl bg-zinc-50 p-3 text-xs text-zinc-600">
-                <p className="font-semibold text-zinc-800">Where we looked (Toronto only)</p>
+                <p className="font-semibold text-zinc-800">Where we looked (GTA only)</p>
                 {(["origin", "destination"] as const).map((k) => {
                   const pl = places[k];
                   const fuzzy = !!pl.found && pl.found.source !== "gazetteer" && pl.found.name.toLowerCase() !== pl.typed.toLowerCase();
                   return (
                     <p key={k} className={!pl.found ? "text-red-800" : fuzzy ? "text-amber-900" : ""}>
-                      {k === "origin" ? "From" : "To"} &ldquo;{pl.typed}&rdquo;: {!pl.found ? "not found in Toronto" : <b className="font-semibold">{pl.found.name}</b>}
+                      {k === "origin" ? "From" : "To"} &ldquo;{pl.typed}&rdquo;: {!pl.found ? "not found in the GTA" : <b className="font-semibold">{pl.found.name}</b>}
                       {fuzzy && " (closest match from an OpenStreetMap search, check this is the place you meant)"}
                     </p>
                   );
@@ -773,7 +773,7 @@ export default function Home() {
                   <p>
                     {missing ? (
                       <>
-                        We couldn&rsquo;t find &ldquo;{missing}&rdquo; in Toronto. Try a street address, an intersection like &ldquo;King and Spadina&rdquo;, or a landmark like &ldquo;CN Tower&rdquo;.
+                        We couldn&rsquo;t find &ldquo;{missing}&rdquo; in the GTA. Try a street address, an intersection like &ldquo;King and Spadina&rdquo;, or a landmark like &ldquo;CN Tower&rdquo;.
                       </>
                     ) : (
                       <>None of the four bots could finish a route for this trip. Try rewording it, or start from an example.</>

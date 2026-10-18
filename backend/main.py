@@ -115,8 +115,8 @@ async def bikeshare_stations():
 async def route(req: RouteRequest):
     o, d = await resolve(req.origin), await resolve(req.destination)
     for n, p in (("origin", o), ("destination", d)):
-        if not geo.in_toronto(p["lat"], p["lon"]):
-            raise HTTPException(422, f"{n} is outside the Toronto area")
+        if not geo.in_gta(p["lat"], p["lon"]):
+            raise HTTPException(422, f"{n} is outside the GTA")
     result = await planner.plan((o["lat"], o["lon"]), (d["lat"], d["lon"]), req.constraints)
     result["origin_place"], result["destination_place"] = o, d
     return result

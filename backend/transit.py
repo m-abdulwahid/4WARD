@@ -57,21 +57,25 @@ def _stop_ll(lines, node):
 
 
 @lru_cache(maxsize=1)
-def subway_stations() -> list[tuple[str, float, float]]:
-    """Every real TTC subway station from the GTFS-derived line graph, one point per station (its
-    platforms, e.g. "Bloor Station - Eastbound Platform" / "- Westbound Platform", averaged together).
-    Used to search interchange points (park & ride, future ride-hail-to-hub) over every real station
-    instead of a short hand-picked list."""
+def interchange_stations() -> list[tuple[str, float, float, str]]:
+    """Every real TTC subway station AND GO train station from the GTFS-derived line graph, one point
+    per station (its platforms/directions, e.g. "Bloor Station - Eastbound Platform", averaged
+    together), tagged with its kind ("subway" or "go_train"). Used to search interchange points
+    (park & ride, future ride-hail-to-hub) over every real station instead of a short hand-picked
+    list -- GO stations especially, since they carry the GTA's real large commuter parking lots."""
     lines, nodes, _, _ = _net()
     agg: dict[str, list[tuple[float, float]]] = {}
+    kind_of: dict[str, str] = {}
     for li, si in nodes:
         ln = lines[li]
-        if ln.get("type") != "subway":
+        if ln.get("type") not in ("subway", "go_train"):
             continue
         s = ln["stops"][si]
         name = s["name"].split(" - ")[0].strip()
         agg.setdefault(name, []).append((s["lat"], s["lon"]))
-    return [(name, sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts)) for name, pts in agg.items()]
+        kind_of[name] = ln["type"]
+    return [(name, sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts), kind_of[name])
+            for name, pts in agg.items()]
 
 
 def _rail_route(a, b, walk_weight: float = 1.0):

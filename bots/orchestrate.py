@@ -97,14 +97,14 @@ async def _resolve_diversity(keys, results, user, base_url, emit, max_steps, tim
 
 
 async def _out_of_scope(user: dict) -> str | None:
-    """Same Toronto-only check the engine applies to every /route call, run up front so an unresolvable
+    """Same GTA-only check the engine applies to every /route call, run up front so an unresolvable
     trip never spins up four cloud browsers (or lets a bot loop forever guessing spellings) just to fail."""
     misses = [label for label, q in (("origin", user["origin"]), ("destination", user["destination"]))
               if not await geo.geocode(q)]
     if not misses:
         return None
     bad = " and ".join(f"{label} ({user[label]!r})" for label in misses)
-    return f"Could not find {bad} in Toronto -- 4WARD only covers the Toronto area."
+    return f"Could not find {bad} in the GTA -- 4WARD only covers the Greater Toronto Area."
 
 
 async def run_all(prompt: str, emit: Emit | None = None, base_url: str | None = None, keys: list[str] | None = None,

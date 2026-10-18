@@ -18,26 +18,30 @@ ALL_MODES = ["walk", "bike", "ebike", "bikeshare", "drive", "rideshare", "transi
 NEEDS = {"bike": "has_bike", "ebike": "has_ebike", "drive": "has_car", "park_ride": "has_car"}
 
 PARK_RIDE_LOTS = [
-    ("Finch Station", 43.7807, -79.4148), ("Kennedy Station", 43.7323, -79.2637),
-    ("Kipling Station", 43.6372, -79.5361), ("Don Mills Station", 43.7756, -79.3463),
-    ("Wilson Station", 43.7342, -79.4504), ("Islington Station", 43.6454, -79.5245),
-    ("Downsview Park Station", 43.7534, -79.4784),
+    ("Finch Station", 43.7807, -79.4148, "subway"), ("Kennedy Station", 43.7323, -79.2637, "subway"),
+    ("Kipling Station", 43.6372, -79.5361, "subway"), ("Don Mills Station", 43.7756, -79.3463, "subway"),
+    ("Wilson Station", 43.7342, -79.4504, "subway"), ("Islington Station", 43.6454, -79.5245, "subway"),
+    ("Downsview Park Station", 43.7534, -79.4784, "subway"),
+    ("Milton GO", 43.52364, -79.867172, "go_train"), ("Oakville GO", 43.455594, -79.682242, "go_train"),
+    ("Richmond Hill GO", 43.874307, -79.426167, "go_train"), ("Unionville GO", 43.851689, -79.314332, "go_train"),
+    ("Durham College Oshawa GO", 43.870909, -78.88585, "go_train"),
 ]  # curated shortlist for the manual picker UI only -- the engine's own auto choice searches every station (below)
 
 PARK_RIDE_SEARCH_N = 10  # how many of the nearest real stations get a real drive+transit quote when picking automatically
 
 
 async def _best_park_ride_station(origin: tuple[float, float], dest: tuple[float, float], hour: int,
-                                   tm: float) -> tuple[str, float, float] | None:
+                                   tm: float) -> tuple[str, float, float, str] | None:
     """Pick the station that actually minimizes total trip time, searched over every real TTC subway
-    station (not a hand-picked shortlist of 7) -- a true discrete optimum, not a nearest-neighbour guess.
-    Bounded to the PARK_RIDE_SEARCH_N most promising-by-straight-line candidates so a request stays fast;
-    each of those gets a real OSRM drive time and a real Dijkstra transit time, not an estimate."""
-    all_stations = transit.subway_stations()
+    AND GO train station (not a hand-picked shortlist of 7) -- a true discrete optimum, not a
+    nearest-neighbour guess. Bounded to the PARK_RIDE_SEARCH_N most promising-by-straight-line
+    candidates so a request stays fast; each of those gets a real OSRM drive time and a real Dijkstra
+    transit time, not an estimate."""
+    all_stations = transit.interchange_stations()
     toward = [s for s in all_stations if haversine_km((s[1], s[2]), dest) < haversine_km(origin, dest)]
     pool = sorted(toward or all_stations, key=lambda s: haversine_km(origin, (s[1], s[2])))[:PARK_RIDE_SEARCH_N]
 
-    async def _try(s: tuple[str, float, float]):
+    async def _try(s: tuple[str, float, float, str]):
         sp = (s[1], s[2])
         d, opt = await asyncio.gather(osm.leg("drive", origin, sp), transit.rail_option(sp, dest, hour))
         if not opt:
@@ -113,6 +117,36 @@ def _finish(cand_id: str, title: str, legs: list[dict], c: Constraints, depart: 
         cand["leave_by"] = (ab - timedelta(seconds=dur_s)).strftime("%H:%M")
     cand.update(extra or {})
     return cand
+
+
+def _apply_transit_fare(legs: list[dict], c: Constraints, boardings: int, trip_minutes: float) -> list[str]:
+    """Mutates legs in place: sets co2_kg on every rail/bus leg, and cost on one leg per fare system
+    actually present. A single itinerary can now legitimately mix GO and TTC legs, since they share
+    one line graph (transit.py) -- that was never possible with TTC-only data. No PRESTO combined-trip
+    discount is modeled for a GO+TTC trip; that is flagged in a note rather than guessed at."""
+    go_legs = [l for l in legs if l["mode"] == "go_train"]
+    ttc_legs = [l for l in legs if l["mode"] in ("subway", "lrt_streetcar", "bus")]
+    for l in go_legs:
+        l["co2_kg"] = fares.emissions_kg("go_train", l["distance_km"])
+    for l in ttc_legs:
+        l["co2_kg"] = fares.emissions_kg(l["mode"], l["distance_km"])
+    for l in legs:
+        l.setdefault("co2_kg", 0.0)
+        l.setdefault("cost", 0.0)
+    notes = []
+    if go_legs:
+        go_total = fares.go_fare(sum(l["distance_km"] for l in go_legs))
+        go_legs[0]["cost"] = go_total
+        notes.append(f"GO fare ${go_total:.2f} is an ESTIMATE (distance-based PRESTO fare, verify)")
+    if ttc_legs:
+        ttc_boardings = max(1, boardings - (1 if go_legs else 0))
+        ttc_total = fares.transit_trip_fare(ttc_boardings, trip_minutes, not c.no_presto, c.rides_this_week)
+        ttc_legs[0]["cost"] = ttc_total
+        notes.append(("Presto" if not c.no_presto else "Cash fare") + f" ${ttc_total:.2f}" +
+                     (", transfers free within 2 h" if ttc_boardings > 1 else ""))
+    if go_legs and ttc_legs:
+        notes.append("GO and TTC fares shown separately; PRESTO's combined-trip discount is not modeled")
+    return notes
 
 
 def _unavailable(cid, title, why):
@@ -215,59 +249,51 @@ async def plan(origin: tuple[float, float], dest: tuple[float, float], c: Constr
                     continue
                 legs = opt["legs"]
                 total_min = sum(l["duration_s"] for l in legs) / 60
-                fare = fares.transit_trip_fare(opt["boardings"], total_min, not c.no_presto, c.rides_this_week)
-                for l in legs:
-                    if l["mode"] in ("subway", "lrt_streetcar", "bus"):
-                        l["co2_kg"] = fares.emissions_kg(l["mode"], l["distance_km"])
-                        l["cost"] = 0.0
-                    l.setdefault("co2_kg", 0.0)
-                    l.setdefault("cost", 0.0)
-                first_ride = next(l for l in legs if l["mode"] != "walk")
-                first_ride["cost"] = fare
-                for l in legs:
-                    if l["mode"] in ("bus",):
-                        l["duration_s"] = l["duration_s"]  # estimated bus already includes traffic factor
+                notes = _apply_transit_fare(legs, c, opt["boardings"], total_min)
                 kind = {"transit_rail": "rail", "transit_rail_lowwalk": "rail_lowwalk"}.get(opt["kind"], "bus")
-                notes = [("Presto" if not c.no_presto else "Cash fare") + f" ${fare:.2f}" + (", transfers free within 2 h" if opt["boardings"] > 1 else "")]
                 if kind == "bus":
                     notes.append("Bus leg is an ESTIMATE (no stop-level schedule routing)")
-                out.append(_finish(f"transit_{kind}", {"rail": "TTC subway/streetcar", "rail_lowwalk": "TTC subway (less walking)", "bus": "TTC bus"}[kind], legs, c, depart, hour,
-                                   max(0, opt["boardings"] - 1), notes))
+                has_go = any(l["mode"] == "go_train" for l in legs)
+                has_ttc_rail = any(l["mode"] in ("subway", "lrt_streetcar") for l in legs)
+                if kind == "bus":
+                    title = "TTC bus"
+                elif has_go and has_ttc_rail:
+                    title = "GO + TTC rail"
+                elif has_go:
+                    title = "GO Train"
+                else:
+                    title = {"rail": "TTC subway/streetcar", "rail_lowwalk": "TTC subway (less walking)"}[kind]
+                out.append(_finish(f"transit_{kind}", title, legs, c, depart, hour, max(0, opt["boardings"] - 1), notes))
 
         elif m == "park_ride":
             chosen_lot = next((p for p in PARK_RIDE_LOTS if p[0] == c.park_ride_lot), None) if c.park_ride_lot else None
-            if chosen_lot:
-                lot = chosen_lot
-            else:
-                lot = await _best_park_ride_station(origin, dest, hour, tm)
+            lot = chosen_lot or await _best_park_ride_station(origin, dest, hour, tm)
             if not lot:
                 out.append(_unavailable("park_ride", "Park & ride", "No usable park & ride station found"))
                 continue
-            lp = (lot[1], lot[2])
+            name, lat, lon, kind = lot
+            lp = (lat, lon)
             d1 = await osm.leg("drive", origin, lp)
             opt = await transit.rail_option(lp, dest, hour)
             if not opt:
-                out.append(_unavailable("park_ride", "Park & ride", "No rail option from the nearest commuter lot"))
+                out.append(_unavailable("park_ride", "Park & ride", f"No transit option from {name}"))
                 continue
             dur = d1["duration_s"] * tm
-            drive_cost = fares.driving_cost(d1["distance_km"], c.ev) + float(fares.A["ttc_lot_parking_day"]["value"])
-            legs = [_leg("car", f"Drive to {lot[0]} lot", origin, lp, d1, drive_cost,
+            lot_fee = float(fares.A["go_lot_parking_day" if kind == "go_train" else "ttc_lot_parking_day"]["value"])
+            drive_cost = fares.driving_cost(d1["distance_km"], c.ev) + lot_fee
+            legs = [_leg("car", f"Drive to {name}", origin, lp, d1, drive_cost,
                          fares.emissions_kg("ev" if c.ev else "car", d1["distance_km"]), dur)] + opt["legs"][1:]
-            total_min = sum(l["duration_s"] for l in legs) / 60
-            fare = fares.transit_trip_fare(opt["boardings"], total_min - dur / 60, not c.no_presto, c.rides_this_week)
-            for l in legs[1:]:
-                l.setdefault("co2_kg", 0.0)
-                l.setdefault("cost", 0.0)
-                if l["mode"] in ("subway", "lrt_streetcar"):
-                    l["co2_kg"] = fares.emissions_kg(l["mode"], l["distance_km"])
-            next(l for l in legs[1:] if l["mode"] != "walk")["cost"] = fare
+            transit_legs = legs[1:]
+            transit_min = sum(l["duration_s"] for l in transit_legs) / 60
+            fare_notes = _apply_transit_fare(transit_legs, c, opt["boardings"], transit_min)
+            lot_note = f"Park at {name} (lot fee is an estimate)" if lot_fee else f"Park at {name} (usually free for PRESTO riders, verify)"
             out.append(_finish("park_ride", "Park & ride", legs, c, depart, hour, max(0, opt["boardings"] - 1),
-                               [f"Park at {lot[0]} (lot fee is an estimate), then TTC ${fare:.2f}"]))
+                               [lot_note] + fare_notes))
 
     pareto.mark(out)
     await asyncio.to_thread(reliability.annotate, out, c.model_dump(), depart)
 
     return {"origin": list(origin), "destination": list(dest), "depart": depart.strftime("%H:%M"),
             "candidates": out, "traffic_multiplier": tm,
-            "data_notes": ["Road/walk/bike legs: OpenStreetMap routing", "Transit: TTC GTFS static line graph (headways estimated)",
+            "data_notes": ["Road/walk/bike legs: OpenStreetMap routing", "Transit: TTC + GO Transit GTFS static line graph (headways estimated)",
                            "Traffic: typical-hour estimate, not live"]}

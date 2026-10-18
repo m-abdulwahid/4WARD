@@ -374,5 +374,5 @@ export default function RouteMap({
     if (ready.current) draw();
   }, [routes, origin, destination, colorBy, styleGen, lineScale, fitKey]);
 
-  return <div ref={el} className="h-full w-full" data-testid="map" role="application" aria-label="Route map of Toronto" />;
+  return <div ref={el} className="h-full w-full" data-testid="map" role="application" aria-label="Route map of the Greater Toronto Area" />;
 }

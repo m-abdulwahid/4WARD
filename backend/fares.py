@@ -15,12 +15,18 @@ def ttc_fare(rides_this_week: int = 0, presto: bool = True, transfers_within_win
 
 
 def transit_trip_fare(vehicle_boardings: int, trip_minutes: float, presto: bool = True, rides_this_week: int = 0) -> float:
-    """Fare for a transit itinerary. Boardings within the transfer window share one fare."""
+    """Fare for a TTC-only transit itinerary. Boardings within the transfer window share one fare."""
     if vehicle_boardings <= 0:
         return 0.0
     window = A["ttc_transfer_window_min"]["value"]
     fares = 1 + int(max(0.0, trip_minutes) // window)  # a new fare after each window expiry
     return round(ttc_fare(rides_this_week, presto) * fares, 2)
+
+
+def go_fare(distance_km: float) -> float:
+    """GO Transit PRESTO fare for one GO train leg. A distance-based ESTIMATE, not the flat TTC fare --
+    GO uses its own distance-banded fare table that changes over time (verify before a demo)."""
+    return round(A["go_fare_base"]["value"] + A["go_fare_per_km"]["value"] * max(0.0, distance_km), 2)
 
 
 def driving_cost(distance_km: float, ev: bool = False) -> float:

@@ -1,11 +1,11 @@
-"""Geometry helpers and geocoding (built-in Toronto gazetteer first, Nominatim second, cached)."""
+"""Geometry helpers and geocoding (built-in GTA gazetteer first, Nominatim second, cached)."""
 import json
 import math
 from pathlib import Path
 
 import httpx
 
-from .config import TORONTO_BBOX
+from .config import GTA_BBOX
 
 CACHE = Path(__file__).resolve().parent.parent / "data" / "geocode_cache.json"
 
@@ -39,6 +39,26 @@ GAZETTEER = {
     "casa loma": (43.6780, -79.4094),
     "mount sinai hospital": (43.6573, -79.3902),
     "scotiabank arena": (43.6435, -79.3791),
+    # GO Transit stations across the wider GTA (coordinates from Metrolinx's GTFS static feed)
+    "oshawa": (43.870909, -78.88585),
+    "oshawa go": (43.870909, -78.88585),
+    "whitby go": (43.86484, -78.93818),
+    "ajax go": (43.847766, -79.041372),
+    "pickering go": (43.831576, -79.084594),
+    "union station go": (43.645195, -79.3806),
+    "milton go": (43.52364, -79.867172),
+    "oakville go": (43.455594, -79.682242),
+    "burlington go": (43.341265, -79.809141),
+    "bramalea go": (43.7022591, -79.6887512),
+    "brampton": (43.7022591, -79.6887512),
+    "cooksville go": (43.582973, -79.623695),
+    "mississauga": (43.582973, -79.623695),
+    "markham go": (43.882691, -79.262469),
+    "unionville go": (43.851689, -79.314332),
+    "markham": (43.882691, -79.262469),
+    "richmond hill go": (43.874307, -79.426167),
+    "newmarket go": (44.060426, -79.459289),
+    "aurora go": (44.000758, -79.459725),
     "rogers centre": (43.6414, -79.3894),
 }
 
@@ -63,8 +83,8 @@ def _save_cache(c: dict) -> None:
         pass
 
 
-def in_toronto(lat: float, lon: float) -> bool:
-    a, b, c, d = TORONTO_BBOX
+def in_gta(lat: float, lon: float) -> bool:
+    a, b, c, d = GTA_BBOX
     return a <= lat <= b and c <= lon <= d
 
 
@@ -89,7 +109,7 @@ async def geocode(query: str) -> dict | None:
     cache = _load_cache()
     if q in cache:
         return {**cache[q], "source": "cache"}
-    a, b, c, d = TORONTO_BBOX
+    a, b, c, d = GTA_BBOX
     try:
         async with httpx.AsyncClient(timeout=8, headers={"User-Agent": "4ward-hackathon/0.1"}) as cl:
             r = await cl.get("https://nominatim.openstreetmap.org/search", params={
