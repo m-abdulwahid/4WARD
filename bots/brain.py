@@ -189,8 +189,10 @@ plan: {{"actions":[...]}} where each action is one of
   (each with a short "reason")
 Actions run in order in the browser. Rules:
 - Use only testids listed in `controls`. Typing replaces the field's value. aria-pressed "true" means a toggle is ON.
-- You are only ever asked to plan the SETUP (planner_state is "idle"): type origin and destination, turn ON only the
-  travel modes worth exploring for YOUR objective (and OFF the rest), turn on constraint toggles matching the user's
+- You are only ever asked to plan the SETUP (planner_state is "idle"): type origin and destination, turn ON exactly
+  the travel modes listed in `modes_to_enable` and make sure every other mode toggle is OFF (that list is already
+  the correct, complete set for YOUR objective -- it is not a suggestion, do not add or drop a mode from it even if
+  one looks unnecessary; a corrective click will undo it if you do), turn on constraint toggles matching the user's
   facts (has_car, no_presto, ...), set bags and times - and END the plan with click compute-route.
 - Do not plan anything after compute-route. The routing engine computes every candidate's real numbers itself
   (Dijkstra for transit, OSM for walk/bike/drive), and deterministic code -- never an LLM guess -- explores the one
@@ -215,6 +217,7 @@ class GeminiBrain:
         self.client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
         self.model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
         self.avoid_ids = avoid_ids or set()
+        self.want_modes = modes_for(profile_key, user["constraints"])
         prof = PROFILES[profile_key]
         self.system = SYSTEM.format(name=prof.name, objective=prof.objective)
 
@@ -225,6 +228,7 @@ class GeminiBrain:
 
         brief = {
             "request": self.user,
+            "modes_to_enable": self.want_modes,  # the complete, correct mode set for this objective -- not a choice
             "controls": [{k: v for k, v in c.items() if v not in (None, "")} for c in page["controls"]
                          if not c["testid"].startswith(("route-card", "map", "planner"))],
             "planner_state": page["state"],
@@ -248,12 +252,28 @@ class GeminiBrain:
         return acts
 
 
+def _mode_fix(page: dict, want_modes: list[str]) -> dict | None:
+    """One corrective click if the live mode toggles don't match this objective's required set (see
+    profiles.modes_for) -- a deterministic safety net for PHASE 1. Gemini is told the exact mode list and
+    told it is not a suggestion, but an LLM plan can still quietly skip one (e.g. never trying plain
+    "drive" for the fastest objective, because its own training-time intuition said park & ride is
+    usually faster for a suburban trip -- a real bug this guard exists to catch). Returns None once the
+    live toggles already match, so callers can gate a `compute-route` click on this being None."""
+    for m in ALL_MODES:
+        ctl = _control(page, f"mode-toggle-{m}")
+        if ctl and (ctl.get("pressed") == "true") != (m in want_modes):
+            return {"action": "click", "testid": f"mode-toggle-{m}",
+                    "reason": f"(corrected) {'enable' if m in want_modes else 'disable'} {m}: required for this objective's mode set"}
+    return None
+
+
 class FallbackBrain:
     """Gemini plans a batch of actions per call (few API calls, rate-limit friendly); every action is validated against the
     live page right before it runs. Any error/invalid action drops the plan and the rule brain covers that step."""
 
     def __init__(self, profile_key: str, user: dict, avoid_ids: set[str] | None = None):
         self.rule = RuleBrain(profile_key, user, avoid_ids)
+        self.want_modes = modes_for(profile_key, user["constraints"])
         self.gemini = None
         self.queue: list[dict] = []
         self.fallbacks = 0
@@ -281,6 +301,12 @@ class FallbackBrain:
                     self.queue = await self.gemini.next_actions(page, history)
                     if not self.queue:
                         raise ValueError("empty plan")
+                # Gate the finishing click: never let the plan compute until the mode toggles actually
+                # match this objective's required set, no matter what Gemini decided to plan.
+                if self.queue[0].get("action") == "click" and self.queue[0].get("testid") == "compute-route":
+                    fix = _mode_fix(page, self.want_modes)
+                    if fix:
+                        return {**fix, "brain": "gemini"}
                 a = self.queue.pop(0)
                 validate(a, page)
                 return {**a, "brain": "gemini"}

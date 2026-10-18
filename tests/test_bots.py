@@ -222,6 +222,55 @@ async def test_fallback_to_rule_brain_when_gemini_breaks(monkeypatch):
     assert Good.calls == 1                                                # one API call served two steps
 
 
+def test_mode_fix_returns_none_when_toggles_already_match():
+    from bots.brain import _mode_fix
+
+    page = {"controls": [{"testid": "mode-toggle-drive", "pressed": "true"}, {"testid": "mode-toggle-transit", "pressed": "true"},
+                         {"testid": "mode-toggle-walk", "pressed": "false"}]}
+    assert _mode_fix(page, ["drive", "transit"]) is None
+
+
+def test_mode_fix_flags_a_missing_required_mode():
+    from bots.brain import _mode_fix
+
+    page = {"controls": [{"testid": "mode-toggle-drive", "pressed": "false"},  # required but left off
+                         {"testid": "mode-toggle-park_ride", "pressed": "true"}, {"testid": "mode-toggle-transit", "pressed": "true"}]}
+    fix = _mode_fix(page, ["drive", "park_ride", "transit"])
+    assert fix == {"action": "click", "testid": "mode-toggle-drive",
+                    "reason": "(corrected) enable drive: required for this objective's mode set"}
+
+
+@pytest.mark.asyncio
+async def test_fallback_brain_corrects_a_plan_that_skips_a_required_mode(monkeypatch):
+    """The real bug this guards against: Gemini's free-form plan decided the 'fastest' objective didn't
+    need plain driving, went straight to compute-route, and the deterministic picker then correctly chose
+    the best of an incomplete pool -- a route that was not actually the fastest one available."""
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    user = {"origin": "a", "destination": "b", "constraints": {"has_car": True}}
+    b = FallbackBrain("fastest", user)
+    assert "drive" in b.want_modes  # modes_for("fastest", has_car=True) always includes it
+
+    class SkipsDrive:
+        async def next_actions(self, page, history):
+            return [{"action": "click", "testid": "compute-route", "reason": "go"}]
+
+    b.gemini = SkipsDrive()
+    page = {"state": "idle", "controls": [
+        {"testid": "mode-toggle-drive", "pressed": "false"},
+        {"testid": "mode-toggle-park_ride", "pressed": "true"},
+        {"testid": "mode-toggle-transit", "pressed": "true"},
+        {"testid": "mode-toggle-bikeshare", "pressed": "true"},
+        {"testid": "mode-toggle-walk", "pressed": "true"},
+        {"testid": "compute-route"},
+    ]}
+    a = await b.next_action(page, [])
+    assert a["brain"] == "gemini" and a["action"] == "click" and a["testid"] == "mode-toggle-drive"
+    # once the live toggles actually match, the originally-planned compute-route click is let through
+    page["controls"][0]["pressed"] = "true"
+    a2 = await b.next_action(page, [])
+    assert a2["testid"] == "compute-route"
+
+
 def test_gemini_brain_builds_offline(monkeypatch):
     """Constructing the real brain and its schema must not need the network."""
     monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
