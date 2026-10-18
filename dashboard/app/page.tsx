@@ -147,7 +147,8 @@ export default function Home() {
               log: [...b[k].log, { n: ev.n, action: ev.action, testid: ev.testid, text: ev.text, reason: ev.reason, outcome: ev.outcome }],
             },
           }));
-        else if (ev.type === "result") patch(k, { status: ev.status, route: ev.route, brain: ev.brain, elapsed: ev.elapsed_s, error: ev.error });
+        else if (ev.type === "result")
+          patch(k, { status: ev.status, route: ev.route, alternatives: ev.alternatives, brain: ev.brain, elapsed: ev.elapsed_s, error: ev.error });
         else if (ev.type === "run_done") {
           setRunning(false);
           if (ev.result?.error) setError(ev.result.error);
@@ -433,6 +434,7 @@ export default function Home() {
                   setChosen(b.key);
                   setFocus(b.key);
                 }}
+                onUseAlternative={(alt) => patch(b.key, { route: alt })}
               />
             ))}
             <p className="text-[11px] leading-relaxed text-zinc-500">

@@ -1,6 +1,7 @@
 "use client";
 import type { BotKey, BotState } from "@/lib/bots";
 import { STATUS_CHIP } from "@/lib/bots";
+import type { Candidate } from "@/lib/api";
 import { MODES, legColor, legMode } from "@/lib/modes";
 import ModeBadge, { ModeLine } from "@/components/ModeBadge";
 
@@ -33,6 +34,7 @@ export default function RouteCard({
   chosen,
   onFocus,
   onChoose,
+  onUseAlternative,
 }: {
   bot: Bot;
   state: BotState;
@@ -42,6 +44,7 @@ export default function RouteCard({
   chosen: boolean;
   onFocus: () => void;
   onChoose: () => void;
+  onUseAlternative: (alt: Candidate) => void;
 }) {
   const r = state.route;
   return (
@@ -153,6 +156,49 @@ export default function RouteCard({
                   ? `Reliability: made it on ${r.reliability.reliability_pct}% of the last ${r.reliability.history_days} matching day(s) (${r.reliability.basis}, from TTC delay history).`
                   : "Reliability: not enough TTC delay history yet for this route and time."}
               </p>
+              {state.alternatives && state.alternatives.length > 1 && (
+                <div className="mt-3 border-t border-zinc-100 pt-2">
+                  <p className="text-[11px] font-semibold text-zinc-500">{bot.name}'s other options, ranked the same way it picked this one</p>
+                  <table className="mt-1 w-full text-xs" data-testid={`alternatives-${bot.key}`}>
+                    <thead>
+                      <tr className="text-left text-[10px] text-zinc-400">
+                        <th className="w-16 font-normal">Time</th>
+                        <th className="w-14 font-normal">Cost</th>
+                        <th className="w-16 font-normal">CO₂</th>
+                        <th className="font-normal">Route</th>
+                        <th className="w-16 font-normal"></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {state.alternatives.map((alt) => {
+                        const isCurrent = alt.id === r.id;
+                        return (
+                          <tr key={alt.id} className={isCurrent ? "bg-zinc-50" : undefined}>
+                            <td className="py-1 tabular-nums">{Math.round(alt.duration_min ?? 0)} min</td>
+                            <td className="tabular-nums">${(alt.cost ?? 0).toFixed(2)}</td>
+                            <td className="tabular-nums">{(alt.co2_kg ?? 0).toFixed(2)} kg</td>
+                            <td className="truncate pr-2 text-zinc-600">{alt.title}</td>
+                            <td>
+                              {isCurrent ? (
+                                <span className="text-[10px] font-semibold text-zinc-500">current</span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  data-testid={`use-alt-${bot.key}-${alt.id}`}
+                                  onClick={() => onUseAlternative(alt)}
+                                  className="rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-semibold text-zinc-800 hover:bg-zinc-200 focus-visible:outline-2 focus-visible:outline-zinc-900"
+                                >
+                                  Use this
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           )}
           <button

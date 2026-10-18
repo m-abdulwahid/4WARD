@@ -30,6 +30,7 @@ export type BotState = {
   brain?: string;
   elapsed?: number;
   route?: Candidate | null;
+  alternatives?: Candidate[];
   error?: string | null;
 };
 
