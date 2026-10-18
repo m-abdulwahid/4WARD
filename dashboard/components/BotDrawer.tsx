@@ -7,83 +7,150 @@ import { StatusChip } from "@/components/RouteCard";
 const SHOT_W = 1000;
 const SHOT_H = 640;
 
-type Zoom = { key: BotKey; pinned: boolean } | null;
+const KEYS = BOTS.map((b) => b.key);
+
+function ExpandIcon({ className }: { className?: string }) {
+  return (
+    <svg aria-hidden viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3" />
+    </svg>
+  );
+}
 
 /**
- * Enlarged, live view of one bot's screen.
- * Hover mode (mouse): the preview ignores the pointer, so the mouse stays "over" the tile underneath and nothing
- * flickers; leaving the tile closes it. Pinned mode (tap, click or keyboard): a close button, tap outside or Esc.
+ * Enlarged, live view of one bot's screen. Click-only: stays open until outside click, X, or Escape.
+ * Arrow keys / on-screen arrows switch bots without closing. Image updates as new frames arrive.
  */
-function ZoomView({ zoom, bots, onClose }: { zoom: NonNullable<Zoom>; bots: Record<BotKey, BotState>; onClose: () => void }) {
+function ZoomView({
+  zoomKey,
+  bots,
+  onClose,
+  onSelect,
+}: {
+  zoomKey: BotKey;
+  bots: Record<BotKey, BotState>;
+  onClose: () => void;
+  onSelect: (k: BotKey) => void;
+}) {
   const [shown, setShown] = useState(false);
   const closeRef = useRef<HTMLButtonElement>(null);
-  const bot = BOTS.find((b) => b.key === zoom.key)!;
-  const s = bots[zoom.key];
+  const bot = BOTS.find((b) => b.key === zoomKey)!;
+  const s = bots[zoomKey];
+  const idx = KEYS.indexOf(zoomKey);
+  const prevKey = KEYS[(idx + KEYS.length - 1) % KEYS.length];
+  const nextKey = KEYS[(idx + 1) % KEYS.length];
+
   useEffect(() => {
-    const id = requestAnimationFrame(() => setShown(true)); // start the fade/scale-in on the next frame
+    const id = requestAnimationFrame(() => setShown(true));
     return () => cancelAnimationFrame(id);
   }, []);
+
   useEffect(() => {
-    if (zoom.pinned) closeRef.current?.focus();
-  }, [zoom.pinned]);
+    closeRef.current?.focus();
+  }, [zoomKey]);
+
+  // Prevent scrollbar jump / layout shift under the overlay.
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        onSelect(prevKey);
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        onSelect(nextKey);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [prevKey, nextKey, onSelect]);
 
   return (
     <div
       data-testid="bot-zoom"
-      role={zoom.pinned ? "dialog" : undefined}
-      aria-modal={zoom.pinned ? true : undefined}
+      role="dialog"
+      aria-modal="true"
       aria-label={`${bot.name} bot's screen, enlarged`}
-      onClick={zoom.pinned ? onClose : undefined}
-      className={`fixed inset-0 z-50 flex items-center justify-center p-2 transition-opacity duration-150 motion-reduce:transition-none sm:p-6 ${
-        zoom.pinned ? "bg-zinc-950/50" : "pointer-events-none bg-zinc-950/20"
-      } ${shown ? "opacity-100" : "opacity-0"}`}
+      onClick={onClose}
+      className={`fixed inset-0 z-50 flex items-center justify-center p-2 transition-opacity duration-200 motion-reduce:transition-none sm:p-6 ${
+        shown ? "bg-zinc-950/50 opacity-100" : "bg-zinc-950/50 opacity-0"
+      }`}
     >
       <figure
         onClick={(e) => e.stopPropagation()}
-        // phones: nearly full width; larger screens: about 75% of the width, capped near the screenshot's own size
-        // and by the screen height so the whole frame stays visible
-        className={`flex max-h-full w-[96vw] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-black/10 transition-transform duration-150 motion-reduce:transition-none sm:w-[min(76vw,1150px,calc((100dvh-8rem)*1.5625))] ${shown ? "scale-100" : "scale-95"}`}
+        className={`relative flex max-h-full w-[96vw] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-black/10 transition-transform duration-200 motion-reduce:transition-none sm:w-[min(76vw,1150px,calc((100dvh-8rem)*1.5625))] ${
+          shown ? "scale-100" : "scale-95"
+        }`}
       >
         <figcaption className="flex items-center justify-between gap-3 border-b border-zinc-100 px-4 py-2.5">
           <span className="flex min-w-0 items-center gap-2 text-sm font-semibold">
             <span aria-hidden className="h-3 w-3 shrink-0 rounded-full" style={{ background: bot.color }} />
             <span className="truncate">{bot.name}</span>
-            <StatusChip botKey={zoom.key} state={s} />
+            <StatusChip botKey={zoomKey} state={s} />
+            <span className="hidden text-[11px] font-normal text-zinc-500 sm:inline">Live</span>
           </span>
-          {zoom.pinned ? (
-            <button
-              ref={closeRef}
-              type="button"
-              data-testid="bot-zoom-close"
-              onClick={onClose}
-              aria-label="Close the enlarged screen"
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-zinc-100 text-zinc-700 hover:bg-zinc-200 focus-visible:outline-2 focus-visible:outline-zinc-900"
-            >
-              <svg aria-hidden viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round">
-                <path d="M6 6l12 12M18 6 6 18" />
-              </svg>
-            </button>
-          ) : (
-            <span className="shrink-0 text-[11px] text-zinc-500">Live</span>
-          )}
+          <button
+            ref={closeRef}
+            type="button"
+            data-testid="bot-zoom-close"
+            onClick={onClose}
+            aria-label="Close the enlarged screen"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-zinc-100 text-zinc-700 hover:bg-zinc-200 focus-visible:outline-2 focus-visible:outline-zinc-900"
+          >
+            <svg aria-hidden viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round">
+              <path d="M6 6l12 12M18 6 6 18" />
+            </svg>
+          </button>
         </figcaption>
-        {/* phones: taller than the tile and swipeable sideways, so it is a real zoom */}
-        <div data-testid="bot-zoom-screen" className="relative overflow-x-auto bg-zinc-100 max-sm:h-[min(62dvh,560px)] sm:aspect-[1000/640]">
-          {s.frame ? (
-            // updates live: a new frame for this bot re-renders the same image
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={`data:image/jpeg;base64,${s.frame}`}
-              alt={`${bot.name} bot's browser view, enlarged`}
-              width={SHOT_W}
-              height={SHOT_H}
-              className="h-full max-w-none object-contain max-sm:w-auto sm:w-full"
-            />
-          ) : (
-            <div className="flex h-full items-center justify-center text-sm text-zinc-500">No screen yet</div>
-          )}
+
+        <div className="relative">
+          <button
+            type="button"
+            aria-label={`Show ${BOTS.find((b) => b.key === prevKey)!.name} bot`}
+            onClick={() => onSelect(prevKey)}
+            className="absolute top-1/2 left-1 z-10 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full bg-white/95 text-zinc-800 shadow ring-1 ring-black/10 hover:bg-white focus-visible:outline-2 focus-visible:outline-zinc-900 sm:left-2 sm:h-10 sm:w-10"
+          >
+            <svg aria-hidden viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round">
+              <path d="M15 6 9 12l6 6" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            aria-label={`Show ${BOTS.find((b) => b.key === nextKey)!.name} bot`}
+            onClick={() => onSelect(nextKey)}
+            className="absolute top-1/2 right-1 z-10 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full bg-white/95 text-zinc-800 shadow ring-1 ring-black/10 hover:bg-white focus-visible:outline-2 focus-visible:outline-zinc-900 sm:right-2 sm:h-10 sm:w-10"
+          >
+            <svg aria-hidden viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round">
+              <path d="m9 6 6 6-6 6" />
+            </svg>
+          </button>
+
+          {/* phones: taller than the tile and swipeable sideways, so it is a real zoom */}
+          <div data-testid="bot-zoom-screen" className="relative overflow-x-auto bg-zinc-100 max-sm:h-[min(62dvh,560px)] sm:aspect-[1000/640]">
+            {s.frame ? (
+              // updates live: a new frame for this bot re-renders the same image
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={`data:image/jpeg;base64,${s.frame}`}
+                alt={`${bot.name} bot's browser view, enlarged`}
+                width={SHOT_W}
+                height={SHOT_H}
+                className="h-full max-w-none object-contain max-sm:w-auto sm:w-full"
+              />
+            ) : (
+              <div className="flex h-full items-center justify-center text-sm text-zinc-500">No screen yet</div>
+            )}
+          </div>
         </div>
-        <p className="px-4 pt-1.5 text-[11px] text-zinc-500 sm:hidden">Swipe sideways to look around the screen.</p>
+
+        <p className="px-4 pt-1.5 text-[11px] text-zinc-500 sm:hidden">Swipe sideways to look around the screen. Use the arrows to switch bots.</p>
         {s.lastReason && (
           <p className="line-clamp-2 px-4 py-2 text-xs text-zinc-600">
             {s.steps ? `Step ${s.steps}: ` : ""}
@@ -100,15 +167,13 @@ const OUTCOME_CLS = (outcome?: string) =>
 
 export default function BotDrawer({ bots, running, onClose }: { bots: Record<BotKey, BotState>; running: boolean; onClose: () => void }) {
   const closeRef = useRef<HTMLButtonElement>(null);
-  // one bot's full step log (from master), and the enlarged live screen (hover or tap)
   const [expanded, setExpanded] = useState<BotKey | null>(null);
   const expandedRef = useRef<BotKey | null>(null);
   expandedRef.current = expanded;
   const logEndRef = useRef<HTMLDivElement>(null);
-  const [zoom, setZoom] = useState<Zoom>(null);
-  const zoomRef = useRef<Zoom>(null);
-  zoomRef.current = zoom;
-  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [zoomKey, setZoomKey] = useState<BotKey | null>(null);
+  const zoomRef = useRef<BotKey | null>(null);
+  zoomRef.current = zoomKey;
   const tileRefs = useRef<Partial<Record<BotKey, HTMLButtonElement | null>>>({});
 
   useEffect(() => {
@@ -117,8 +182,8 @@ export default function BotDrawer({ bots, running, onClose }: { bots: Record<Bot
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       if (zoomRef.current) {
-        const k = zoomRef.current.key;
-        setZoom(null);
+        const k = zoomRef.current;
+        setZoomKey(null);
         tileRefs.current[k]?.focus();
       } else if (expandedRef.current) setExpanded(null);
       else onClose();
@@ -126,27 +191,14 @@ export default function BotDrawer({ bots, running, onClose }: { bots: Record<Bot
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
-  useEffect(
-    () => () => {
-      if (hoverTimer.current) clearTimeout(hoverTimer.current);
-    },
-    [],
-  );
+
   useEffect(() => {
     if (expanded) logEndRef.current?.scrollIntoView({ block: "end" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expanded, bots[expanded ?? "cheap"]?.log.length]);
 
-  const clearTimer = () => {
-    if (hoverTimer.current) clearTimeout(hoverTimer.current);
-    hoverTimer.current = null;
-  };
-
-  /**
-   * A bot's live screen: hover to preview it enlarged (grid only), tap/click/Enter to pin the enlarged view.
-   * The step-log view shows the screen large already and right where the pointer lands, so there it opens on click only.
-   */
-  const screen = (k: BotKey, name: string, s: BotState, hover = true) => (
+  /** Click/tap a bot screen to open the stable enlarged view (no hover). */
+  const screen = (k: BotKey, name: string, s: BotState) => (
     <button
       ref={(el) => {
         tileRefs.current[k] = el;
@@ -156,22 +208,10 @@ export default function BotDrawer({ bots, running, onClose }: { bots: Record<Bot
       disabled={!s.frame}
       aria-label={`Enlarge the ${name} bot's screen`}
       aria-haspopup="dialog"
-      onPointerEnter={(e) => {
-        if (!hover || e.pointerType !== "mouse" || !s.frame || zoomRef.current?.pinned) return;
-        clearTimer();
-        // short delay: passing over a screen on the way somewhere else does not open it
-        hoverTimer.current = setTimeout(() => setZoom({ key: k, pinned: false }), zoomRef.current ? 0 : 140);
-      }}
-      onPointerLeave={(e) => {
-        if (e.pointerType !== "mouse") return;
-        clearTimer();
-        setZoom((z) => (z && !z.pinned && z.key === k ? null : z));
-      }}
       onClick={() => {
-        clearTimer();
-        setZoom({ key: k, pinned: true }); // tap, click or keyboard: stays open until X, tap outside or Esc
+        if (s.frame) setZoomKey(k);
       }}
-      className="relative block aspect-[1000/640] w-full shrink-0 cursor-zoom-in bg-zinc-100 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-zinc-900 disabled:cursor-default"
+      className="group relative block aspect-[1000/640] w-full shrink-0 cursor-pointer bg-zinc-100 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-zinc-900 disabled:cursor-default disabled:opacity-80"
     >
       {s.frame ? (
         // eslint-disable-next-line @next/next/no-img-element
@@ -179,17 +219,25 @@ export default function BotDrawer({ bots, running, onClose }: { bots: Record<Bot
       ) : (
         <span className="flex h-full items-center justify-center text-xs text-zinc-500">{running ? "Starting browser…" : "Waiting for a trip"}</span>
       )}
+      {s.frame && (
+        <span
+          aria-hidden
+          className="pointer-events-none absolute right-1.5 bottom-1.5 flex h-7 w-7 items-center justify-center rounded-md bg-zinc-900/75 text-white shadow-sm ring-1 ring-white/20 transition-opacity group-hover:bg-zinc-900/90 group-focus-visible:bg-zinc-900/90"
+        >
+          <ExpandIcon className="h-3.5 w-3.5" />
+        </span>
+      )}
     </button>
   );
 
-  const zoomView = zoom && (
+  const zoomView = zoomKey && (
     <ZoomView
-      key={`${zoom.key}-${zoom.pinned}`}
-      zoom={zoom}
+      zoomKey={zoomKey}
       bots={bots}
+      onSelect={setZoomKey}
       onClose={() => {
-        const k = zoom.key;
-        setZoom(null);
+        const k = zoomKey;
+        setZoomKey(null);
         tileRefs.current[k]?.focus();
       }}
     />
@@ -221,7 +269,7 @@ export default function BotDrawer({ bots, running, onClose }: { bots: Record<Bot
           </h2>
           <StatusChip botKey={b.key} state={s} />
         </div>
-        {screen(b.key, b.name, s, false)}
+        {screen(b.key, b.name, s)}
         <ol data-testid="bot-step-log" className="flex-1 overflow-y-auto px-4 py-3 text-xs">
           {s.log.length === 0 && <li className="text-zinc-400">No steps yet.</li>}
           {s.log.map((e) => (
@@ -259,7 +307,7 @@ export default function BotDrawer({ bots, running, onClose }: { bots: Record<Bot
       <div className="flex items-center justify-between border-b border-zinc-100 px-4 py-3">
         <div>
           <h2 className="text-sm font-semibold">Watch the bots</h2>
-          <p className="text-xs text-zinc-500">Hover or tap a screen to enlarge it. Open a bot&rsquo;s steps to follow them one by one.</p>
+          <p className="text-xs text-zinc-500">Click or tap a screen to enlarge it. Open a bot&rsquo;s steps to follow them one by one.</p>
         </div>
         <button
           ref={closeRef}
