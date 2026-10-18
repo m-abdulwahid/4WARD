@@ -180,16 +180,19 @@ async def rail_option(a, b, hour: int, walk_weight: float = 1.0) -> dict | None:
 
 
 async def bus_option(a, b, hour: int) -> dict:
-    """Generic bus ride between two points: ESTIMATED (no stop-level routing)."""
-    d = haversine_km(a, b) * 1.35
+    """Generic bus ride between two points: ESTIMATED duration (no stop-level schedule for any GTA bus
+    agency), but the ride leg follows real streets -- buses run on roads, so its geometry comes from the
+    same OSRM driving route used for `drive`, not a straight line between origin and destination."""
+    g = await osm.leg("drive", a, b)
+    d = g["distance_km"] * 1.08  # buses detour slightly for stops versus the fastest car route
     ride_s = d / SPEEDS_KMH["bus"] * 3600 * (traffic_multiplier(hour) / 1.2)
     walk_km = 0.35
     legs = [
         {"mode": "walk", "label": "Walk to bus stop", "from": list(a), "to": list(a), "distance_km": walk_km,
          "duration_s": walk_km / WALK_KMH * 3600, "geometry": [list(a)], "provenance": "estimated"},
-        {"mode": "bus", "label": "TTC bus (estimated, includes ~7 min wait)", "from": list(a), "to": list(b),
-         "distance_km": round(d, 3), "duration_s": ride_s + 7 * 60, "geometry": [list(a), list(b)],
-         "provenance": "estimated"},
+        {"mode": "bus", "label": "Local bus (estimated, includes ~7 min wait)", "from": list(a), "to": list(b),
+         "distance_km": round(d, 3), "duration_s": ride_s + 7 * 60, "geometry": g["geometry"],
+         "provenance": "estimated (road-following, no stop-level schedule)"},
         {"mode": "walk", "label": "Walk to destination", "from": list(b), "to": list(b), "distance_km": walk_km,
          "duration_s": walk_km / WALK_KMH * 3600, "geometry": [list(b)], "provenance": "estimated"},
     ]

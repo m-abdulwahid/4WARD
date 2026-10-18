@@ -8,6 +8,8 @@ import { MODES, ModeKey, iconSvg, inkOn, legColor, legMode } from "@/lib/modes";
 export type MapRoute = { id: string; color: string; candidate: Candidate; emphasized?: boolean; label?: string; visible?: boolean };
 export type MapPadding = { top: number; right: number; bottom: number; left: number };
 export type BikeStation = { id: string; name: string; lat: number; lon: number; bikes: number; ebikes: number; docks: number };
+// One per route being animated in timelapse mode: its current position and mode, in map [lng, lat] order.
+export type Vehicle = { id: string; color: string; lngLat: [number, number]; mode: ModeKey; arrived?: boolean };
 
 const EMPTY: GeoJSON.FeatureCollection = { type: "FeatureCollection", features: [] };
 
@@ -169,6 +171,7 @@ export default function RouteMap({
   lineScale = 1,
   onRouteClick,
   fitKey = "",
+  vehicles = null,
 }: {
   routes: MapRoute[];
   origin?: [number, number] | null; // [lat, lon]
@@ -180,6 +183,7 @@ export default function RouteMap({
   lineScale?: number; // thicker lines for the clean single-route view
   onRouteClick?: (id: string) => void; // a route line was clicked (home map); gets the route id (bot key)
   fitKey?: string; // changes when the free map area changes on purpose (e.g. Map tab vs a tab with a panel): refit then
+  vehicles?: Vehicle[] | null; // timelapse mode: one moving marker per animated route, updated every frame
 }) {
   const el = useRef<HTMLDivElement>(null);
   const map = useRef<maplibregl.Map | null>(null);
@@ -373,6 +377,38 @@ export default function RouteMap({
     };
     if (ready.current) draw();
   }, [routes, origin, destination, colorBy, styleGen, lineScale, fitKey]);
+
+  // Timelapse vehicle markers: moved every frame via setLngLat (cheap), never recreated, so motion is
+  // smooth. The element itself is only rebuilt when a vehicle's mode changes (it switched legs).
+  const vehicleMarkers = useRef<Map<string, { marker: maplibregl.Marker; mode: ModeKey; arrived: boolean }>>(new Map());
+  useEffect(() => {
+    const m = map.current;
+    if (!m || !ready.current) return;
+    const live = new Set((vehicles ?? []).map((v) => v.id));
+    for (const [id, entry] of vehicleMarkers.current) {
+      if (!live.has(id)) {
+        entry.marker.remove();
+        vehicleMarkers.current.delete(id);
+      }
+    }
+    for (const v of vehicles ?? []) {
+      let entry = vehicleMarkers.current.get(v.id);
+      if (!entry || entry.mode !== v.mode || entry.arrived !== Boolean(v.arrived)) {
+        entry?.marker.remove();
+        const e = document.createElement("div");
+        e.setAttribute("role", "img");
+        e.setAttribute("aria-label", `${MODES[v.mode].label} vehicle, ${v.arrived ? "arrived" : "en route"}`);
+        const ring = v.arrived ? "0 0 0 3px #fff, 0 0 0 5px " + v.color : "0 0 0 3px #fff";
+        e.style.cssText = `width:30px;height:30px;border-radius:50%;background:${v.color};display:flex;align-items:center;justify-content:center;box-shadow:${ring},0 2px 8px #0005;transition:opacity .15s;opacity:${v.arrived ? 0.55 : 1}`;
+        e.innerHTML = iconSvg(v.mode, 16, inkOn(v.color));
+        const marker = new maplibregl.Marker({ element: e }).setLngLat(v.lngLat).addTo(m);
+        entry = { marker, mode: v.mode, arrived: Boolean(v.arrived) };
+        vehicleMarkers.current.set(v.id, entry);
+      } else {
+        entry.marker.setLngLat(v.lngLat);
+      }
+    }
+  }, [vehicles, styleGen]);
 
   return <div ref={el} className="h-full w-full" data-testid="map" role="application" aria-label="Route map of the Greater Toronto Area" />;
 }

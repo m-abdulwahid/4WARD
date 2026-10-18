@@ -10,6 +10,9 @@ data/*.log
 data/*.err.log
 data/gtfs/
 data/gtfs_go/
+data/gtfs_yrt/
+data/gtfs_durham/
+data/gtfs_miway/
 data/completegtfs.zip
 data/screenshots/
 data/geocode_cache.json

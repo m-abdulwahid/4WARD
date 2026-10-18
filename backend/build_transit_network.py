@@ -27,6 +27,22 @@ SOURCES = [
         "rail_types": {"2": "go_train"}, "headway_min": {"2": 30},  # GO frequency varies a lot by line/time; flat estimate
         "skip_prefix": None,
     },
+    # Local GTA municipal bus agencies, same compact line-graph treatment as TTC/GO: real stop sequences from
+    # each agency's own published GTFS static feed, not the generic haversine bus_option() estimate. Headway is
+    # a flat typical-service estimate (none of these publish a usable realtime headway feed); fares still use
+    # the Presto-style formula in fares.py, labeled as an estimate (see planner._apply_transit_fare).
+    {
+        "dir": ROOT / "data" / "gtfs_yrt", "prefix": "YRT_", "label": "York Region Transit GTFS static (yrt.ca)",
+        "rail_types": {"3": "bus"}, "headway_min": {"3": 20}, "skip_prefix": None,
+    },
+    {
+        "dir": ROOT / "data" / "gtfs_durham", "prefix": "DRT_", "label": "Durham Region Transit GTFS static (Durham Region Open Data)",
+        "rail_types": {"3": "bus"}, "headway_min": {"3": 25}, "skip_prefix": None,
+    },
+    {
+        "dir": ROOT / "data" / "gtfs_miway", "prefix": "MIWAY_", "label": "MiWay GTFS static (Mississauga)",
+        "rail_types": {"3": "bus"}, "headway_min": {"3": 15}, "skip_prefix": None,
+    },
 ]
 
 

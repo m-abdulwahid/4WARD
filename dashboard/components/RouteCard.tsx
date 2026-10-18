@@ -84,6 +84,9 @@ export default function RouteCard({
                   })}
                 </p>
               )}
+              {!focused && r && state.alternatives && state.alternatives.length > 1 && (
+                <p className="mt-1 text-[11px] text-zinc-400">Compared {state.alternatives.length} options for this goal · tap to see them</p>
+              )}
             </div>
           </div>
           <StatusChip botKey={bot.key} state={state} />

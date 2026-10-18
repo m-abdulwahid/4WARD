@@ -71,28 +71,38 @@ async def _run_steel(keys, user, base_url, emit, max_steps, timeout_s, stream_fr
 
 
 async def _resolve_diversity(keys, results, user, base_url, emit, max_steps, timeout_s, stream_frames, backend) -> list[dict]:
-    """If two bots land on the same route (by id), rerun the lower-priority one (later in `keys`)
-    telling it to avoid every route id already claimed."""
+    """If two bots land on the same route (by id), rerun the lower-priority one (later in `keys`) asking it
+    to avoid just that specific id -- not every route id already claimed. Avoiding everyone else's pick too
+    can over-constrain the rerun into whatever absurd option is left (e.g. a 3 hour walk) just to look
+    different. If the rerun still collides with someone else, or comes back dramatically worse than the
+    honest duplicate it was trying to replace, the original duplicate is kept instead: a repeated route
+    across two objectives is an honest, explainable result (sometimes two goals really do agree); a forced
+    bad one to avoid that is not."""
     claimed: dict[str, str] = {}
-    reruns: list[tuple[int, str]] = []
+    reruns: list[tuple[int, str, str]] = []  # (index, key, the one route id this bot duplicated)
     for i, key in enumerate(keys):
         rid = ((results[i] or {}).get("route") or {}).get("id")
         if not rid:
             continue
         if rid in claimed:
-            reruns.append((i, key))
+            reruns.append((i, key, rid))
         else:
             claimed[rid] = key
-    for i, key in reruns:
-        dup_of = claimed[((results[i] or {}).get("route") or {}).get("id")]
-        avoid = set(claimed)
-        await _emit(emit, {"type": "diversity_rerun", "bot": key, "duplicate_of": dup_of, "avoid_ids": sorted(avoid)})
-        run_one = _run_one_steel if backend == "steel" else _run_one_local
-        new_result = await run_one(key, user, base_url, emit, max_steps, timeout_s, stream_frames, avoid_ids=avoid)
-        results[i] = new_result
-        new_rid = (new_result.get("route") or {}).get("id")
-        if new_rid:
-            claimed[new_rid] = key
+    run_one = _run_one_steel if backend == "steel" else _run_one_local
+    for i, key, dup_rid in reruns:
+        dup_of = claimed[dup_rid]
+        orig_dur = ((results[i] or {}).get("route") or {}).get("duration_min")
+        await _emit(emit, {"type": "diversity_rerun", "bot": key, "duplicate_of": dup_of, "avoid_ids": [dup_rid]})
+        alt = await run_one(key, user, base_url, emit, max_steps, timeout_s, stream_frames, avoid_ids={dup_rid})
+        alt_route = alt.get("route") or {}
+        alt_rid, alt_dur = alt_route.get("id"), alt_route.get("duration_min")
+        still_duplicate = bool(alt_rid) and alt_rid in claimed and claimed[alt_rid] != key
+        much_worse = alt_dur is None or (orig_dur is not None and alt_dur > orig_dur * 2.5)
+        if still_duplicate or much_worse:
+            continue  # keep the original: an honest duplicate beats a forced, materially worse "different" pick
+        results[i] = alt
+        if alt_rid:
+            claimed[alt_rid] = key
     return results
 
 

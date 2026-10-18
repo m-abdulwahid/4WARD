@@ -119,16 +119,72 @@ def _finish(cand_id: str, title: str, legs: list[dict], c: Constraints, depart: 
     return cand
 
 
+_AGENCY_PREFIXES = [("GO_", "GO"), ("YRT_", "YRT"), ("DRT_", "Durham Region Transit"), ("MIWAY_", "MiWay")]
+
+
+def _agency_of(route_id: str | None) -> str:
+    """Which GTA transit agency a line-graph route_id belongs to, from its build_transit_network.py
+    prefix (unprefixed = TTC, see that script's docstring on why TTC ids are never prefixed)."""
+    for prefix, name in _AGENCY_PREFIXES:
+        if route_id and route_id.startswith(prefix):
+            return name
+    return "TTC"
+
+
+# Brampton Transit has no public GTFS static feed we could find (checked brampton.ca, bramptontransit.com and
+# Ontario/MobilityData's open catalogues; all either 404 or unlisted) -- so unlike YRT/Durham Region Transit/MiWay
+# it is never a real line in the graph. A trip clearly within Brampton still gets an honest agency guess on the
+# generic estimate instead of a misleading blank "Local bus", labeled as a guess, never presented as real routing.
+_BRAMPTON_BBOX = (43.63, 43.80, -79.87, -79.68)  # lat_min, lat_max, lon_min, lon_max
+
+
+def _in_brampton(p: tuple[float, float]) -> bool:
+    lat, lon = p
+    return _BRAMPTON_BBOX[0] <= lat <= _BRAMPTON_BBOX[1] and _BRAMPTON_BBOX[2] <= lon <= _BRAMPTON_BBOX[3]
+
+
+def _transit_title(legs: list[dict], kind: str, origin: tuple[float, float] | None = None,
+                    dest: tuple[float, float] | None = None) -> str:
+    """Build a title that names every agency actually present. The line graph now merges TTC, GO and
+    three local municipal bus agencies (YRT, Durham Region Transit, MiWay) into one Dijkstra search, so
+    a single itinerary can legitimately cross several of them -- never flatten that into a generic
+    "TTC subway/streetcar" label when it secretly also used a MiWay bus leg."""
+    if kind == "bus":
+        bus_leg = next((l for l in legs if l["mode"] == "bus"), None)
+        if bus_leg and bus_leg.get("route_id"):
+            return f"{_agency_of(bus_leg['route_id'])} bus"
+        if origin and dest and _in_brampton(origin) and _in_brampton(dest):
+            return "Brampton Transit (guess, no published GTFS feed found)"
+        return "Local bus"
+    parts: list[str] = []
+    for l in legs:
+        if l["mode"] == "go_train" and "GO Train" not in parts:
+            parts.append("GO Train")
+        elif l["mode"] in ("subway", "lrt_streetcar"):
+            label = "TTC subway (less walking)" if kind == "rail_lowwalk" else "TTC subway/streetcar"
+            if label not in parts:
+                parts.append(label)
+        elif l["mode"] == "bus" and l.get("route_id"):
+            agency = _agency_of(l["route_id"])
+            label = f"{agency} bus"
+            if label not in parts:
+                parts.append(label)
+    return " + ".join(parts) if parts else "Transit"
+
+
 def _apply_transit_fare(legs: list[dict], c: Constraints, boardings: int, trip_minutes: float) -> list[str]:
     """Mutates legs in place: sets co2_kg on every rail/bus leg, and cost on one leg per fare system
-    actually present. A single itinerary can now legitimately mix GO and TTC legs, since they share
-    one line graph (transit.py) -- that was never possible with TTC-only data. No PRESTO combined-trip
-    discount is modeled for a GO+TTC trip; that is flagged in a note rather than guessed at."""
+    actually present. A single itinerary can now legitimately mix GO, TTC and local-agency bus legs,
+    since they all share one line graph (transit.py). GO has its own real distance-based PRESTO fare
+    (fares.go_fare); TTC/YRT/Durham Region Transit/MiWay all use the same transit_trip_fare() formula as
+    a flat GTA-wide PRESTO estimate (their adult cash/PRESTO fares are all close but not identical --
+    flagged in the note, never silently presented as exact). No PRESTO combined-trip discount is modeled
+    for a GO+local trip; that is flagged in a note rather than guessed at."""
     go_legs = [l for l in legs if l["mode"] == "go_train"]
-    ttc_legs = [l for l in legs if l["mode"] in ("subway", "lrt_streetcar", "bus")]
+    local_legs = [l for l in legs if l["mode"] in ("subway", "lrt_streetcar", "bus")]
     for l in go_legs:
         l["co2_kg"] = fares.emissions_kg("go_train", l["distance_km"])
-    for l in ttc_legs:
+    for l in local_legs:
         l["co2_kg"] = fares.emissions_kg(l["mode"], l["distance_km"])
     for l in legs:
         l.setdefault("co2_kg", 0.0)
@@ -138,14 +194,21 @@ def _apply_transit_fare(legs: list[dict], c: Constraints, boardings: int, trip_m
         go_total = fares.go_fare(sum(l["distance_km"] for l in go_legs))
         go_legs[0]["cost"] = go_total
         notes.append(f"GO fare ${go_total:.2f} is an ESTIMATE (distance-based PRESTO fare, verify)")
-    if ttc_legs:
-        ttc_boardings = max(1, boardings - (1 if go_legs else 0))
-        ttc_total = fares.transit_trip_fare(ttc_boardings, trip_minutes, not c.no_presto, c.rides_this_week)
-        ttc_legs[0]["cost"] = ttc_total
-        notes.append(("Presto" if not c.no_presto else "Cash fare") + f" ${ttc_total:.2f}" +
-                     (", transfers free within 2 h" if ttc_boardings > 1 else ""))
-    if go_legs and ttc_legs:
-        notes.append("GO and TTC fares shown separately; PRESTO's combined-trip discount is not modeled")
+    if local_legs:
+        local_boardings = max(1, boardings - (1 if go_legs else 0))
+        local_total = fares.transit_trip_fare(local_boardings, trip_minutes, not c.no_presto, c.rides_this_week)
+        local_legs[0]["cost"] = local_total
+        agencies = sorted({_agency_of(l.get("route_id")) for l in local_legs if l["mode"] == "bus" and l.get("route_id")}
+                          | ({"TTC"} if any(l["mode"] in ("subway", "lrt_streetcar") for l in local_legs) else set()))
+        label = "Presto" if not c.no_presto else "Cash fare"
+        transfer_note = ", transfers free within 2 h" if local_boardings > 1 else ""
+        if len(agencies) > 1 or (agencies and agencies != ["TTC"]):
+            notes.append(f"{label} ${local_total:.2f} uses the TTC fare schedule as a GTA-wide PRESTO estimate "
+                         f"({'/'.join(agencies) if agencies else 'local agency'}; verify the exact fare){transfer_note}")
+        else:
+            notes.append(f"{label} ${local_total:.2f}{transfer_note}")
+    if go_legs and local_legs:
+        notes.append("GO and local transit fares shown separately; PRESTO's combined-trip discount is not modeled")
     return notes
 
 
@@ -253,16 +316,7 @@ async def plan(origin: tuple[float, float], dest: tuple[float, float], c: Constr
                 kind = {"transit_rail": "rail", "transit_rail_lowwalk": "rail_lowwalk"}.get(opt["kind"], "bus")
                 if kind == "bus":
                     notes.append("Bus leg is an ESTIMATE (no stop-level schedule routing)")
-                has_go = any(l["mode"] == "go_train" for l in legs)
-                has_ttc_rail = any(l["mode"] in ("subway", "lrt_streetcar") for l in legs)
-                if kind == "bus":
-                    title = "TTC bus"
-                elif has_go and has_ttc_rail:
-                    title = "GO + TTC rail"
-                elif has_go:
-                    title = "GO Train"
-                else:
-                    title = {"rail": "TTC subway/streetcar", "rail_lowwalk": "TTC subway (less walking)"}[kind]
+                title = _transit_title(legs, kind, origin, dest)
                 out.append(_finish(f"transit_{kind}", title, legs, c, depart, hour, max(0, opt["boardings"] - 1), notes))
 
         elif m == "park_ride":
@@ -295,5 +349,6 @@ async def plan(origin: tuple[float, float], dest: tuple[float, float], c: Constr
 
     return {"origin": list(origin), "destination": list(dest), "depart": depart.strftime("%H:%M"),
             "candidates": out, "traffic_multiplier": tm,
-            "data_notes": ["Road/walk/bike legs: OpenStreetMap routing", "Transit: TTC + GO Transit GTFS static line graph (headways estimated)",
+            "data_notes": ["Road/walk/bike legs: OpenStreetMap routing",
+                           "Transit: TTC + GO Transit + York Region Transit + Durham Region Transit + MiWay GTFS static, one merged line graph (headways estimated)",
                            "Traffic: typical-hour estimate, not live"]}

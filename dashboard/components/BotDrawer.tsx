@@ -17,8 +17,46 @@ function ExpandIcon({ className }: { className?: string }) {
   );
 }
 
+function isLive(s: BotState): boolean {
+  return s.status === "SCANNING" || s.status === "ROUTING";
+}
+
 function hasScreen(s: BotState): boolean {
-  return Boolean(s.liveViewUrl || s.frame);
+  return Boolean((s.liveViewUrl && isLive(s)) || s.frame);
+}
+
+/** How often a still-connecting Steel iframe is force-remounted. Steel's own debug player sometimes never
+ * finishes its first WebRTC handshake; cross-origin content gives us no reliable "it's stuck" signal, so
+ * instead of leaving it dead we just retry on a timer. Cheap and self-healing, no user action needed. */
+const LIVE_RETRY_MS = 12_000;
+
+/** Once a bot is no longer live (done or failed), Steel's own debug player shows its own "Browser
+ * Disconnected" / "Session ended" chrome -- technically accurate (we release the session the moment the
+ * bot finishes, since Steel bills per minute) but it reads as broken. Show a clean summary instead. */
+function FinishedScreen({ s }: { s: BotState }) {
+  if (s.status === "FAILED") {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-1 px-4 text-center text-zinc-500">
+        <span className="text-xs font-semibold text-red-700">Bot stopped</span>
+        {s.error && <span className="line-clamp-2 text-[11px]">{s.error}</span>}
+      </div>
+    );
+  }
+  if (s.route) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-1 px-4 text-center">
+        <span aria-hidden className="text-lg">✓</span>
+        <span className="text-xs font-semibold text-zinc-800">{s.route.title}</span>
+        <span className="text-[11px] text-zinc-500">
+          {s.route.duration_min != null ? `${s.route.duration_min} min` : ""}
+          {s.route.duration_min != null && s.route.cost != null ? " · " : ""}
+          {s.route.cost != null ? `$${s.route.cost.toFixed(2)}` : ""}
+        </span>
+        <span className="text-[10px] text-zinc-400">Live view ended (browser session released)</span>
+      </div>
+    );
+  }
+  return <div className="flex h-full items-center justify-center text-xs text-zinc-500">Live view ended</div>;
 }
 
 /**
@@ -28,11 +66,13 @@ function hasScreen(s: BotState): boolean {
 function ZoomView({
   zoomKey,
   bots,
+  retryEpoch,
   onClose,
   onSelect,
 }: {
   zoomKey: BotKey;
   bots: Record<BotKey, BotState>;
+  retryEpoch: number;
   onClose: () => void;
   onSelect: (k: BotKey) => void;
 }) {
@@ -138,9 +178,17 @@ function ZoomView({
 
           {/* phones: taller than the tile and swipeable sideways, so it is a real zoom */}
           <div data-testid="bot-zoom-screen" className="relative overflow-x-auto bg-zinc-100 max-sm:h-[min(62dvh,560px)] sm:aspect-[1000/640]">
-            {s.liveViewUrl ? (
-              // Steel's own embeddable live view: a real cloud browser, not a screenshot.
-              <iframe src={s.liveViewUrl} title={`${bot.name} bot's live browser (Steel)`} className="h-full w-full border-0" />
+            {s.liveViewUrl && isLive(s) ? (
+              // Steel's own embeddable live view: a real cloud browser, not a screenshot. Remounted on a
+              // timer (key changes) so a session stuck mid-handshake self-heals instead of staying dead.
+              <iframe
+                key={`${zoomKey}-${retryEpoch}`}
+                src={s.liveViewUrl}
+                title={`${bot.name} bot's live browser (Steel)`}
+                className="h-full w-full border-0"
+              />
+            ) : s.liveViewUrl ? (
+              <FinishedScreen s={s} />
             ) : s.frame ? (
               // local backend only: no Steel live view, fall back to the bot's own periodic screenshot
               // eslint-disable-next-line @next/next/no-img-element
@@ -182,6 +230,12 @@ export default function BotDrawer({ bots, running, onClose }: { bots: Record<Bot
   const zoomRef = useRef<BotKey | null>(null);
   zoomRef.current = zoomKey;
   const tileRefs = useRef<Partial<Record<BotKey, HTMLButtonElement | null>>>({});
+  const [retryEpoch, setRetryEpoch] = useState(0);
+
+  useEffect(() => {
+    const id = setInterval(() => setRetryEpoch((e) => e + 1), LIVE_RETRY_MS);
+    return () => clearInterval(id);
+  }, []);
 
   useEffect(() => {
     closeRef.current?.focus();
@@ -220,9 +274,17 @@ export default function BotDrawer({ bots, running, onClose }: { bots: Record<Bot
       }}
       className="group relative block aspect-[1000/640] w-full shrink-0 cursor-pointer bg-zinc-100 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-zinc-900 disabled:cursor-default disabled:opacity-80"
     >
-      {s.liveViewUrl ? (
+      {s.liveViewUrl && isLive(s) ? (
         // visual only in the tile (pointer-events disabled); the enlarged view is interactive
-        <iframe src={s.liveViewUrl} title={`${name} bot's live browser (Steel)`} className="pointer-events-none h-full w-full border-0" tabIndex={-1} />
+        <iframe
+          key={`${k}-${retryEpoch}`}
+          src={s.liveViewUrl}
+          title={`${name} bot's live browser (Steel)`}
+          className="pointer-events-none h-full w-full border-0"
+          tabIndex={-1}
+        />
+      ) : s.liveViewUrl ? (
+        <FinishedScreen s={s} />
       ) : s.frame ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img src={`data:image/jpeg;base64,${s.frame}`} alt={`${name} bot's browser view`} className="h-full w-full object-cover" />
@@ -244,6 +306,7 @@ export default function BotDrawer({ bots, running, onClose }: { bots: Record<Bot
     <ZoomView
       zoomKey={zoomKey}
       bots={bots}
+      retryEpoch={retryEpoch}
       onSelect={setZoomKey}
       onClose={() => {
         const k = zoomKey;

@@ -25,6 +25,7 @@ import { DbStatus, TONE, dbLabel } from "@/lib/dataSource";
 import type { BikeStation, MapPadding } from "@/components/RouteMap";
 
 const RouteMap = dynamic(() => import("@/components/RouteMap"), { ssr: false });
+const Timelapse = dynamic(() => import("@/components/Timelapse"), { ssr: false });
 
 // Turn backend/network messages into what the user should do next.
 function friendlyError(msg: string): string {
@@ -347,6 +348,11 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bots, routeView]);
   const first = done[0] ? bots[done[0].key].route : null;
+  const [timelapseOpen, setTimelapseOpen] = useState(false);
+  const timelapseRoutes = useMemo(
+    () => done.map((b) => ({ key: b.key, name: b.name, color: b.color, candidate: bots[b.key].route as Candidate })),
+    [done, bots],
+  );
 
   // keep routes inside the part of the map that is not covered by the panel / sheet
   const noPanel = tab === "map" || !!routeView;
@@ -811,6 +817,19 @@ export default function Home() {
             {!running && !parsed && !error && (
               <p className="rounded-xl bg-zinc-50 p-4 text-sm text-zinc-600">Plan a trip on the Map tab. Four bots will each find a route with a different goal.</p>
             )}
+            {!running && done.length >= 2 && (
+              <button
+                type="button"
+                data-testid="open-timelapse"
+                onClick={() => setTimelapseOpen(true)}
+                className="flex w-full items-center justify-center gap-2 rounded-xl bg-zinc-900 px-3 py-2.5 text-sm font-semibold text-white hover:bg-zinc-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-900"
+              >
+                <svg aria-hidden viewBox="0 0 24 24" className="h-4 w-4" fill="currentColor">
+                  <path d="M7 5.5v13l11-6.5z" />
+                </svg>
+                Watch the trip unfold
+              </button>
+            )}
             {BOTS.map((b) => (
               <RouteCard
                 key={b.key}
@@ -864,6 +883,15 @@ export default function Home() {
       </section>
 
       {drawer && <BotDrawer bots={bots} running={running} onClose={closeDrawer} />}
+      {timelapseOpen && timelapseRoutes.length >= 2 && (
+        <Timelapse
+          routes={timelapseRoutes}
+          departLabel={first?.depart ?? "12:00"}
+          origin={first ? first.legs[0]?.from : null}
+          destination={first ? first.legs[first.legs.length - 1]?.to : null}
+          onClose={() => setTimelapseOpen(false)}
+        />
+      )}
     </div>
   );
 }
