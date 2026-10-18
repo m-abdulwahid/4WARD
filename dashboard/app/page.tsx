@@ -12,6 +12,7 @@ import RouteChips from "@/components/RouteChips";
 import LayerToggles from "@/components/LayerToggles";
 import MapLegend, { LegendBotStatus } from "@/components/MapLegend";
 import TripOptions from "@/components/TripOptions";
+import { TripConstraints, clock, fitRoutes } from "@/lib/routeFit";
 
 type SortKey = "default" | "cost" | "time" | "co2" | "ontime";
 import ExampleTrips from "@/components/ExampleTrips";
@@ -322,7 +323,19 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prompt, patch]);
 
-  const done = BOTS.filter((b) => bots[b.key].route);
+  // Routes that fit the trip (deadline, budget, bags, car/bike). Everything below (map, chips, legend, Routes list,
+  // timelapse, priority pick) uses this, so a route that breaks a constraint is left out everywhere.
+  const fit = useMemo(
+    () =>
+      fitRoutes(
+        BOTS.filter((b) => bots[b.key].route).map((b) => ({ key: b.key, route: bots[b.key].route as Candidate })),
+        (parsed?.constraints ?? {}) as TripConstraints,
+        budget,
+        !deadlineNote, // a deadline tomorrow cannot be judged against today's clock
+      ),
+    [bots, parsed, budget, deadlineNote],
+  );
+  const done = BOTS.filter((b) => bots[b.key].route && fit.shown.includes(b.key));
   const [hoverBot, setHoverBot] = useState<BotKey | null>(null); // chip under the pointer (or focused)
   const highlight = (hoverBot && !hiddenBots[hoverBot] ? hoverBot : null) ?? focus ?? (showAll ? null : chosen);
 
@@ -345,6 +358,7 @@ export default function Home() {
   const mapRoutes = useMemo(
     () =>
       routeGroups
+        .filter((g) => g.some((b) => fit.shown.includes(b.key)))
         .filter((g) => !routeView || g.some((b) => b.key === routeView))
         .map((g) => ({
           id: g[0].key,
@@ -354,7 +368,7 @@ export default function Home() {
           emphasized: routeView ? true : highlight ? g.some((b) => b.key === highlight) : true,
           visible: routeView ? true : g.some((b) => !hiddenBots[b.key]),
         })),
-    [routeGroups, bots, highlight, hiddenBots, routeView],
+    [routeGroups, bots, highlight, hiddenBots, routeView, fit],
   );
   // Modes the finished routes use, with the colour each is drawn in (TTC line colour for transit).
   const usedModes = useMemo(() => {
@@ -408,7 +422,15 @@ export default function Home() {
   const legendStatus = Object.fromEntries(
     BOTS.map((b) => {
       const s = bots[b.key];
-      const state = s.route ? "done" : s.status === "FAILED" ? "failed" : running || s.status === "SCANNING" || s.status === "ROUTING" ? "searching" : "waiting";
+      const state = s.route
+        ? fit.excluded.includes(b.key)
+          ? "excluded"
+          : "done"
+        : s.status === "FAILED"
+          ? "failed"
+          : running || s.status === "SCANNING" || s.status === "ROUTING"
+            ? "searching"
+            : "waiting";
       return [b.key, { state, error: s.error }];
     }),
   ) as Record<BotKey, LegendBotStatus>;
@@ -511,7 +533,12 @@ export default function Home() {
         >
           <div className="w-max">
             <RouteChips
-              found={{ cheap: !!bots.cheap.route, fastest: !!bots.fastest.route, green: !!bots.green.route, reliable: !!bots.reliable.route }}
+              found={{
+                cheap: fit.shown.includes("cheap"),
+                fastest: fit.shown.includes("fastest"),
+                green: fit.shown.includes("green"),
+                reliable: fit.shown.includes("reliable"),
+              }}
               hidden={hiddenBots}
               onToggle={toggleBot}
               onShowAll={showEveryRoute}
@@ -538,7 +565,6 @@ export default function Home() {
           <RouteSummary
             bot={BOTS.find((b) => b.key === routeView)!}
             route={bots[routeView].route!}
-            deadlineNote={deadlineNote}
             onBack={() => backToAllRoutes(false)}
             onChange={() => backToAllRoutes(true)}
           />
@@ -892,6 +918,13 @@ export default function Home() {
                 Watch the trip unfold
               </button>
             )}
+            {fit.fallback && (
+              <p role="status" data-testid="fit-notice" className="rounded-xl bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900 ring-1 ring-amber-200">
+                {fit.fallback.kind === "deadline"
+                  ? `No route arrives by ${clock(fit.fallback.arriveBy)}. Closest options shown.`
+                  : `No route fits your $${fit.fallback.budget.toFixed(2)} budget. Cheapest option shown.`}
+              </p>
+            )}
             <label className="flex items-center justify-between gap-2 text-xs text-zinc-600">
               Order cards by
               <select
@@ -933,7 +966,15 @@ export default function Home() {
                 );
               })}
             </ul>
-            {groupByRoute(sortedBots, bots).map((group) => {
+            {groupByRoute(sortedBots, bots)
+              .filter((group) => group.some((b) => !fit.excluded.includes(b.key)))
+              .sort((ga, gb) => {
+                if (fit.fallback?.kind !== "deadline") return 0;
+                const ia = fit.shown.indexOf(ga[0].key);
+                const ib = fit.shown.indexOf(gb[0].key);
+                return ia >= 0 && ib >= 0 ? ia - ib : 0;
+              })
+              .map((group) => {
               const lead = group[0];
               const members = group.map((b) => ({ bot: b, state: bots[b.key] }));
               return (
@@ -945,6 +986,7 @@ export default function Home() {
                   running={running}
                   budget={budget}
                   deadlineNote={deadlineNote}
+                  arrival={fit.fallback?.kind === "deadline"}
                   focused={group.some((b) => b.key === focus)}
                   chosen={group.some((b) => b.key === chosen)}
                   onFocus={() => {
@@ -962,7 +1004,10 @@ export default function Home() {
                 />
               );
             })}
-            <p className="text-[11px] leading-relaxed text-zinc-500">
+            <p
+              className="text-[11px] leading-relaxed text-zinc-500"
+              title="From the routing engine, not the AI. Transit fares follow TTC and GO rules; driving, parking, rideshare costs and traffic are estimated."
+            >
               Numbers come from the routing engine, not the AI. Transit fares follow TTC rules; driving, parking, rideshare costs and traffic are estimated. Transit schedule data is from TTC GTFS.
             </p>
           </div>

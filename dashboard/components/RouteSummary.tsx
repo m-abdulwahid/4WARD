@@ -15,13 +15,11 @@ type Bot = { key: string; name: string; color: string };
 export default function RouteSummary({
   bot,
   route,
-  deadlineNote,
   onBack,
   onChange,
 }: {
   bot: Bot;
   route: Candidate;
-  deadlineNote?: string | null;
   onBack: () => void;
   onChange: () => void;
 }) {
@@ -103,7 +101,7 @@ export default function RouteSummary({
         ))}
       </dl>
       <p className="mt-1 text-[11px] text-zinc-500">
-        {timingLine(route, deadlineNote)} · Toronto time
+        {timingLine(route)} · Toronto time
       </p>
 
       {legs && (

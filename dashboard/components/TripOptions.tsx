@@ -199,11 +199,6 @@ export default function TripOptions({
             extraNote={
               <>
                 {note("deadline", deadlineText, deadlineP)}
-                {deadlineP?.tomorrow && !leaveP?.tomorrow && (
-                  <p className="text-amber-900">
-                    4WARD checks deadlines against today&rsquo;s clock, so the route cards will skip &ldquo;makes your deadline&rdquo; for a deadline tomorrow. Set a leave time tomorrow too to get that check.
-                  </p>
-                )}
               </>
             }
           />
