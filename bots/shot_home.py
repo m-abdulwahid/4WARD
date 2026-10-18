@@ -15,6 +15,7 @@ async def main(base: str = "http://localhost:3000") -> None:
         page = await b.new_page(viewport={"width": 1500, "height": 950})
         page.on("pageerror", lambda e: print("pageerror:", str(e)[:300]))
         await page.goto(base)
+        await page.get_by_test_id("example-1").click()
         await page.get_by_test_id("plan-trip").click()
         await page.wait_for_timeout(9000)
         await page.screenshot(path=str(OUT / "home_mid.png"))
