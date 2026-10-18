@@ -108,7 +108,7 @@ def combine(per_leg_daily: list[dict[str, float]], slack_s: float, road_sigma_s:
     return {"reliability_pct": max(0, min(100, pct)), "history_days": len(common_dates)}
 
 
-def _delay_factors(legs: list[dict]) -> list[dict]:
+def _delay_factors(legs: list[dict], unmatched_idxs: frozenset[int] = frozenset()) -> list[dict]:
     """'What could delay you': one item per leg with a real live signal (TomTom's current ratio, an
     observed TTC delay folded into a scheduled departure, or an active TTC service alert), each with
     its source and a timestamp; legs with no live signal get one item labelled as a default, not
@@ -116,7 +116,7 @@ def _delay_factors(legs: list[dict]) -> list[dict]:
     Tiger Data's ttc_alerts table."""
     now = time.time()
     out = []
-    for l in legs:
+    for idx, l in enumerate(legs):
         label = l.get("label", "This leg")
         src = l.get("traffic_source") or ""
         prov = l.get("provenance") or ""
@@ -129,6 +129,9 @@ def _delay_factors(legs: list[dict]) -> list[dict]:
             out.append({"text": f"{label}: {prov}", "source": "TTC realtime (GTFS-RT)", "timestamp": now, "default": False})
         elif "ESTIMATED" in src or "ESTIMATED" in prov:
             out.append({"text": f"{label}: no live delay signal for this leg, timing is a typical-pattern estimate",
+                        "source": "typical pattern", "timestamp": now, "default": True})
+        elif idx in unmatched_idxs:
+            out.append({"text": f"{label}: no stored delay history for this route yet, timing uses the default on-time model",
                         "source": "typical pattern", "timestamp": now, "default": True})
         if route_id := l.get("route_id"):
             try:
@@ -150,19 +153,26 @@ def score_route(route: dict, constraints: dict, depart: datetime) -> dict | None
     route_duration_s = sum(l["duration_s"] for l in legs)
     slack_s = _slack_s(route_duration_s, constraints, depart)
     per_leg_daily = []
+    matched_idxs = []
+    unmatched_idxs = []  # scheduled legs with no stored delay history (e.g. GO/YRT/DRT: Tiger Data only has TTC
+                          # history) -- modelled with the same road-timing distribution as a road/bus_est leg,
+                          # instead of left out of the score entirely.
     for i in transit_idxs:
         dow, hour = _leg_dow_hour(depart, legs, i)
         daily = store.ttc_daily_at_dow_hour(legs[i]["route_id"], dow, hour)
         if daily:
             per_leg_daily.append(daily)
+            matched_idxs.append(i)
+        else:
+            unmatched_idxs.append(i)
     if per_leg_daily:
-        per_leg_daily = _apply_transfer_misses(per_leg_daily, [i for i in transit_idxs if legs[i]["route_id"]], legs, depart)
-    road_sigma_s = sum(legs[i]["duration_s"] for i in road_idxs) * ONTIME_CV
+        per_leg_daily = _apply_transfer_misses(per_leg_daily, matched_idxs, legs, depart)
+    road_sigma_s = sum(legs[i]["duration_s"] for i in road_idxs + unmatched_idxs) * ONTIME_CV
     out = combine(per_leg_daily, slack_s, road_sigma_s)
     if out:
         out["basis"] = "arrive_by deadline" if constraints.get("arrive_by") else "5 min on-time budget (no deadline given)"
         out["confidence"] = confidence_label(out["history_days"])
-        out["delay_factors"] = _delay_factors(legs)
+        out["delay_factors"] = _delay_factors(legs, frozenset(unmatched_idxs))
     return out
 
 
