@@ -8,7 +8,6 @@ import RouteCard from "@/components/RouteCard";
 import BotDrawer from "@/components/BotDrawer";
 import RouteSummary from "@/components/RouteSummary";
 import RouteChips from "@/components/RouteChips";
-import { routeSignature } from "@/lib/routeKey";
 import LayerToggles from "@/components/LayerToggles";
 import MapLegend, { LegendBotStatus } from "@/components/MapLegend";
 import TripOptions, { Priority } from "@/components/TripOptions";
@@ -338,20 +337,6 @@ export default function Home() {
         };
   // Route visibility (chips on the map and eyes in the legend share it). Cards in the Routes tab are never hidden.
   const toggleBot = (k: BotKey) => setHiddenBots((h) => ({ ...h, [k]: !h[k] }));
-  // Identical routes are drawn once; the later bot's chip says whose route it matches.
-  const sameAs = (() => {
-    const out: Partial<Record<BotKey, string>> = {};
-    const seen: { sig: string; name: string }[] = [];
-    for (const b of BOTS) {
-      const r = bots[b.key].route;
-      if (!r) continue;
-      const sig = routeSignature(r);
-      const first = seen.find((x) => x.sig === sig);
-      if (first) out[b.key] = first.name;
-      else seen.push({ sig, name: b.name });
-    }
-    return out;
-  })();
   const selectFromMap = (id: string) => {
     if (routeView) return;
     setShowAll(false);
@@ -474,7 +459,6 @@ export default function Home() {
               onSolo={soloBot}
               onShowAll={showEveryRoute}
               onHover={setHoverBot}
-              sameAs={sameAs}
             />
           </div>
         </div>

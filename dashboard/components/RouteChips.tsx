@@ -1,26 +1,17 @@
 "use client";
 import { BOTS, BotKey } from "@/lib/bots";
 
-function Eye({ open }: { open: boolean }) {
+/** On/off switch drawn like the Layers panel switches (TTC lines, Bike Share stations), sized for a chip. */
+function Switch({ on }: { on: boolean }) {
   return (
-    <svg aria-hidden viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-      {open ? (
-        <>
-          <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" />
-          <circle cx="12" cy="12" r="3" />
-        </>
-      ) : (
-        <>
-          <path d="M10.7 5.1A10 10 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-2.2 3.2M6.6 6.6C3.9 8.4 2 12 2 12s3.5 7 10 7a9.7 9.7 0 0 0 5.4-1.6" />
-          <path d="M2 2l20 20" />
-        </>
-      )}
-    </svg>
+    <span aria-hidden className={`relative h-4 w-7 shrink-0 rounded-full transition-colors duration-150 ${on ? "bg-zinc-900" : "bg-zinc-300"}`}>
+      <span className={`absolute top-0.5 left-0 h-3 w-3 rounded-full bg-white shadow transition-transform duration-150 ${on ? "translate-x-3.5" : "translate-x-0.5"}`} />
+    </span>
   );
 }
 
 /**
- * Show or hide each bot's route on the map. Same state as the legend's eye toggles.
+ * Show or hide each bot's route on the map with an on/off switch. Same state as the legend's eye toggles.
  * Double-click a chip (or press its "Only" button) to see that route by itself.
  */
 export default function RouteChips({
@@ -30,7 +21,6 @@ export default function RouteChips({
   onSolo,
   onShowAll,
   onHover,
-  sameAs = {},
 }: {
   found: Record<BotKey, boolean>;
   hidden: Partial<Record<BotKey, boolean>>;
@@ -38,7 +28,6 @@ export default function RouteChips({
   onSolo: (k: BotKey) => void;
   onShowAll: () => void;
   onHover: (k: BotKey | null) => void; // pointer over or keyboard focus on a chip highlights its route
-  sameAs?: Partial<Record<BotKey, string>>; // "same route as Economic"
 }) {
   const withRoute = BOTS.filter((b) => found[b.key]);
   const shownKeys = withRoute.filter((b) => !hidden[b.key]).map((b) => b.key);
@@ -62,24 +51,18 @@ export default function RouteChips({
             <button
               type="button"
               data-testid={`route-chip-${b.key}`}
-              aria-pressed={shown}
+              role="switch"
+              aria-checked={!!shown}
               disabled={!has}
               onClick={() => onToggle(b.key)}
               onDoubleClick={() => onSolo(b.key)}
               title={has ? `${shown ? "Hide" : "Show"} ${b.name}. Double-click to see only this route.` : `${b.name}: no route yet`}
-              aria-label={has ? `${b.name} route, ${shown ? "shown" : "hidden"}` : `${b.name}: no route yet`}
+              aria-label={has ? `${b.name} route on the map` : `${b.name}: no route yet`}
               className={`flex items-center gap-1.5 rounded-full py-1 pr-2 pl-2 text-xs font-medium focus-visible:outline-2 focus-visible:outline-zinc-900 disabled:cursor-default ${shown ? "text-zinc-900" : "text-zinc-400"}`}
             >
               <span aria-hidden className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: b.color, opacity: shown ? 1 : 0.35 }} />
-              <span className="flex flex-col items-start leading-tight">
-                <span className={shown ? "" : "line-through decoration-zinc-400"}>{b.name}</span>
-                {sameAs[b.key] && (
-                  <span data-testid={`route-same-${b.key}`} className="text-[10px] font-normal text-zinc-500">
-                    same route as {sameAs[b.key]}
-                  </span>
-                )}
-              </span>
-              <Eye open={!!shown} />
+              <span>{b.name}</span>
+              <Switch on={!!shown} />
             </button>
             {has && withRoute.length > 1 && (
               <button

@@ -4,7 +4,6 @@ import * as maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { Candidate } from "@/lib/api";
 import { MODES, ModeKey, iconSvg, inkOn, legColor, legMode } from "@/lib/modes";
-import { routeSignature } from "@/lib/routeKey";
 
 export type MapRoute = { id: string; color: string; candidate: Candidate; emphasized?: boolean; label?: string; visible?: boolean };
 export type MapPadding = { top: number; right: number; bottom: number; left: number };
@@ -68,8 +67,8 @@ const NO_PAD: MapPadding = { top: 60, right: 60, bottom: 60, left: 60 };
  * Home map: every leg in its transport mode's style. All found routes are drawn at once. Routes that share a street
  * or line sit side by side (each distinct route gets its own line-offset, spaced by the widest line), and in the
  * overview every line carries a thin edge in its bot's colour over a white casing, so each route stays identifiable.
- * The selected route (or the only route) keeps the plain mode styling. Identical routes are drawn once with a combined
- * label. Hidden routes (route chips, legend eyes) are left out, and the map fits what is shown.
+ * The selected route (or the only route) keeps the plain mode styling. Each route has one plain label with its bot's name.
+ * Hidden routes (route chips, legend eyes) are left out, and the map fits what is shown.
  * Returns the line layer ids, so clicks on them can select a route.
  */
 function drawByMode(m: maplibregl.Map, routes: MapRoute[], bounds: maplibregl.LngLatBounds, markers: maplibregl.Marker[], scale = 1): string[] {
@@ -77,12 +76,8 @@ function drawByMode(m: maplibregl.Map, routes: MapRoute[], bounds: maplibregl.Ln
   // fit to the routes that are shown (all of them if every one is hidden)
   const shown = routes.filter((r) => r.visible !== false);
   (shown.length ? shown : routes).forEach((r) => r.candidate.legs.forEach((l) => l.geometry.forEach(([la, lo]) => bounds.extend([lo, la]))));
-  const groups: MapRoute[][] = [];
-  shown.forEach((r) => {
-    const g = groups.find((x) => routeSignature(x[0].candidate) === routeSignature(r.candidate));
-    if (g) g.push(r);
-    else groups.push([r]);
-  });
+  // every route is drawn on its own (even when two bots found the same path), so every colour shows side by side
+  const groups: MapRoute[][] = shown.map((r) => [r]);
   const n = groups.length;
   const anyDim = groups.some((rs) => rs.every((r) => r.emphasized === false));
   const EDGE = 1.5 * scale;
