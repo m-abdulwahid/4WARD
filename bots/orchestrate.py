@@ -1,21 +1,28 @@
-"""Parse a plain-language prompt with Gemini (or rules), then run the four bots in parallel."""
+"""Parse a plain-language prompt with Gemini (or rules), compute ONE shared candidate set for the trip, then run the
+four bots in parallel. Each bot operates the dashboard, and its route is its own objective's optimum over the shared set."""
 import asyncio
 import os
 import time
+from datetime import datetime
 from typing import Awaitable, Callable
+from zoneinfo import ZoneInfo
 
 import httpx
 from playwright.async_api import async_playwright
 
-from backend import geo
+from backend import geo, planner
 
-from . import critic
+from . import critic, optimize
 from .nlp import parse_prompt
-from .profiles import PROFILES
+from .profiles import ALL_MODES, PROFILES
 from .runner import run_bot
 from .steel_client import steel_session
 
 Emit = Callable[[dict], Awaitable[None] | None]
+TORONTO = ZoneInfo("America/Toronto")
+# The only constraint fields the planner page can express; the shared plan uses exactly these so the engine's
+# candidate set and the page every bot operates are the same computation.
+UI_CONSTRAINTS = ("bags", "no_presto", "has_car", "ev", "has_bike", "has_ebike", "avoid_stairs", "depart_at", "arrive_by")
 
 
 async def _emit(cb: Emit | None, ev: dict) -> None:
@@ -34,87 +41,57 @@ async def _warm_up(base_url: str) -> None:
         pass  # the bots will report a clear error if the dashboard is really down
 
 
-async def _run_one_local(key, user, base_url, emit, max_steps, timeout_s, stream_frames, avoid_ids=None) -> dict:
-    async with async_playwright() as p:
-        browser = await p.chromium.launch()
-        try:
-            ctx = await browser.new_context(viewport={"width": 1000, "height": 640})
-            return await run_bot(ctx, key, user, base_url, emit, max_steps=max_steps, timeout_s=timeout_s,
-                                 stream_frames=stream_frames, avoid_ids=avoid_ids)
-        finally:
-            await browser.close()
-
-
-async def _run_local(keys, user, base_url, emit, max_steps, timeout_s, stream_frames) -> list[dict]:
+async def _run_local(keys, user, base_url, emit, max_steps, timeout_s, stream_frames, shared) -> list[dict]:
     async with async_playwright() as p:
         browser = await p.chromium.launch()
         try:
             return list(await asyncio.gather(*[
                 run_bot(await browser.new_context(viewport={"width": 1000, "height": 640}), k, user, base_url,
-                        emit, max_steps=max_steps, timeout_s=timeout_s, stream_frames=stream_frames)
+                        emit, max_steps=max_steps, timeout_s=timeout_s, stream_frames=stream_frames, shared=shared)
                 for k in keys]))
         finally:
             await browser.close()
 
 
-async def _run_one_steel(key, user, base_url, emit, max_steps, timeout_s, stream_frames, avoid_ids=None) -> dict:
+async def _run_one_steel(key, user, base_url, emit, max_steps, timeout_s, stream_frames, shared) -> dict:
     # Steel's own session cap must outlast the bot's timeout_s, or Steel kills the session mid-run.
     async with steel_session(api_timeout_ms=int((timeout_s + 60) * 1000)) as bot:
         await _emit(emit, {"type": "steel_session", "bot": key, "session_id": bot.id, "live_view_url": bot.live_view_url})
         return await run_bot(bot.context, key, user, base_url, emit, max_steps=max_steps, timeout_s=timeout_s,
-                             stream_frames=stream_frames, avoid_ids=avoid_ids)
+                             stream_frames=stream_frames, shared=shared)
 
 
-async def _run_steel(keys, user, base_url, emit, max_steps, timeout_s, stream_frames) -> list[dict]:
+async def _run_steel(keys, user, base_url, emit, max_steps, timeout_s, stream_frames, shared) -> list[dict]:
     return list(await asyncio.gather(*[
-        _run_one_steel(k, user, base_url, emit, max_steps, timeout_s, stream_frames) for k in keys]))
+        _run_one_steel(k, user, base_url, emit, max_steps, timeout_s, stream_frames, shared) for k in keys]))
 
 
-async def _resolve_diversity(keys, results, user, base_url, emit, max_steps, timeout_s, stream_frames, backend) -> list[dict]:
-    """If two bots land on the same route (by id), rerun the lower-priority one (later in `keys`) asking it
-    to avoid just that specific id -- not every route id already claimed. Avoiding everyone else's pick too
-    can over-constrain the rerun into whatever absurd option is left (e.g. a 3 hour walk) just to look
-    different. If the rerun still collides with someone else, or comes back dramatically worse than the
-    honest duplicate it was trying to replace, the original duplicate is kept instead: a repeated route
-    across two objectives is an honest, explainable result (sometimes two goals really do agree); a forced
-    bad one to avoid that is not."""
-    claimed: dict[str, str] = {}
-    reruns: list[tuple[int, str, str]] = []  # (index, key, the one route id this bot duplicated)
-    for i, key in enumerate(keys):
-        rid = ((results[i] or {}).get("route") or {}).get("id")
-        if not rid:
-            continue
-        if rid in claimed:
-            reruns.append((i, key, rid))
-        else:
-            claimed[rid] = key
-    run_one = _run_one_steel if backend == "steel" else _run_one_local
-    for i, key, dup_rid in reruns:
-        dup_of = claimed[dup_rid]
-        orig_dur = ((results[i] or {}).get("route") or {}).get("duration_min")
-        await _emit(emit, {"type": "diversity_rerun", "bot": key, "duplicate_of": dup_of, "avoid_ids": [dup_rid]})
-        alt = await run_one(key, user, base_url, emit, max_steps, timeout_s, stream_frames, avoid_ids={dup_rid})
-        alt_route = alt.get("route") or {}
-        alt_rid, alt_dur = alt_route.get("id"), alt_route.get("duration_min")
-        still_duplicate = bool(alt_rid) and alt_rid in claimed and claimed[alt_rid] != key
-        much_worse = alt_dur is None or (orig_dur is not None and alt_dur > orig_dur * 2.5)
-        if still_duplicate or much_worse:
-            continue  # keep the original: an honest duplicate beats a forced, materially worse "different" pick
-        results[i] = alt
-        if alt_rid:
-            claimed[alt_rid] = key
-    return results
+async def _locate(user: dict) -> tuple[dict | None, str | None]:
+    """Geocode both ends and apply the same GTA-only check the engine applies to every /route call, up front, so
+    an unresolvable trip never spins up four browsers just to fail."""
+    places = {}
+    for label in ("origin", "destination"):
+        g = await geo.geocode(user[label])
+        if not g:
+            return None, f"Could not find {label} ({user[label]!r}) in the GTA -- 4WARD only covers the Greater Toronto Area."
+        if not geo.in_gta(g["lat"], g["lon"]):
+            return None, f"{label.capitalize()} ({user[label]!r}) is outside the GTA -- 4WARD only covers the Greater Toronto Area."
+        places[label] = g
+    return places, None
 
 
-async def _out_of_scope(user: dict) -> str | None:
-    """Same GTA-only check the engine applies to every /route call, run up front so an unresolvable
-    trip never spins up four cloud browsers (or lets a bot loop forever guessing spellings) just to fail."""
-    misses = [label for label, q in (("origin", user["origin"]), ("destination", user["destination"]))
-              if not await geo.geocode(q)]
-    if not misses:
-        return None
-    bad = " and ".join(f"{label} ({user[label]!r})" for label in misses)
-    return f"Could not find {bad} in the GTA -- 4WARD only covers the Greater Toronto Area."
+async def shared_candidates(user: dict, places: dict) -> list[dict]:
+    """The trip's ONE candidate set: every mode, computed once, ranked by all four bots."""
+    c = {k: v for k, v in user["constraints"].items() if k in UI_CONSTRAINTS and v is not None}
+    constraints = planner.Constraints(modes=list(ALL_MODES), **c)
+    o, d = places["origin"], places["destination"]
+    plan = await planner.plan((o["lat"], o["lon"]), (d["lat"], d["lon"]), constraints)
+    return plan["candidates"]
+
+
+def _summary(c: dict) -> dict:
+    return {k: c.get(k) for k in ("id", "title", "available", "reason", "duration_min", "cost", "co2_kg", "transfers",
+                                  "walk_m", "meets_deadline", "bag_friendliness", "pareto_optimal")}
 
 
 async def run_all(prompt: str, emit: Emit | None = None, base_url: str | None = None, keys: list[str] | None = None,
@@ -125,21 +102,35 @@ async def run_all(prompt: str, emit: Emit | None = None, base_url: str | None = 
     await _emit(emit, {"type": "parsed", **user})
     if not user["origin"] or not user["destination"]:
         return {"error": "Could not find an origin and destination in the prompt.", "parsed": user, "results": []}
-    scope_error = await _out_of_scope(user)
+    places, scope_error = await _locate(user)
     if scope_error:
         return {"error": scope_error, "parsed": user, "results": []}
+    # Pin the departure to one clock time so the engine's run and every bot's page compute identical times.
+    if not user["constraints"].get("depart_at"):
+        user["constraints"]["depart_at"] = datetime.now(TORONTO).strftime("%H:%M")
+    try:
+        shared = await shared_candidates(user, places)
+    except Exception as e:  # engine failure: say so rather than starting four bots that would hit the same failure
+        return {"error": f"The routing engine failed: {type(e).__name__}: {str(e)[:160]}", "parsed": user, "results": []}
     keys = keys or list(PROFILES)
     await _warm_up(base_url)
     backend = os.environ.get("BROWSER_BACKEND", "local").lower()
     if backend == "local":
-        results = await _run_local(keys, user, base_url, emit, max_steps, timeout_s, stream_frames)
+        results = await _run_local(keys, user, base_url, emit, max_steps, timeout_s, stream_frames, shared)
     elif backend == "steel":
-        results = await _run_steel(keys, user, base_url, emit, max_steps, timeout_s, stream_frames)
+        results = await _run_steel(keys, user, base_url, emit, max_steps, timeout_s, stream_frames, shared)
     else:
         raise NotImplementedError(f"BROWSER_BACKEND={backend!r} is not supported; use local or steel")
-    results = await _resolve_diversity(keys, results, user, base_url, emit, max_steps, timeout_s, stream_frames, backend)
     critic.apply(results, user["constraints"])
     for r in results:
         if r.get("critic_violations"):
             await _emit(emit, {"type": "critic", "bot": r["bot"], "violations": r["critic_violations"]})
-    return {"parsed": user, "results": results, "elapsed_s": round(time.time() - t0, 1)}
+    # Runtime check of the optimum guarantee: a bot that failed is skipped (its own error is already shown).
+    chosen = {r["bot"]: r.get("route") for r in results if r.get("status") == "DONE"}
+    violations = optimize.check_invariants(chosen, shared, user["constraints"])
+    if violations:
+        await _emit(emit, {"type": "invariant_violation", "violations": violations})
+    _, relaxed = optimize.eligible(shared, user["constraints"])
+    return {"parsed": user, "results": results, "elapsed_s": round(time.time() - t0, 1),
+            "candidates": [_summary(c) for c in shared], "relaxed": relaxed, "invariant_violations": violations,
+            "route_tags": optimize.tags(chosen)}

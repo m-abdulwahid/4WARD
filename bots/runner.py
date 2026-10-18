@@ -6,7 +6,7 @@ from typing import Awaitable, Callable
 
 from playwright.async_api import BrowserContext, Page
 
-from . import scoring
+from . import optimize
 from .brain import FallbackBrain, validate
 from .critic import flags_for
 from .profiles import PROFILES
@@ -48,8 +48,11 @@ async def _frames(page: Page, key: str, cb: Emit | None, stop: asyncio.Event, fp
 
 async def run_bot(ctx: BrowserContext, key: str, user: dict, base_url: str, emit: Emit | None = None,
                   max_steps: int = 24, timeout_s: float = 120, stream_frames: bool = True,
-                  avoid_ids: set[str] | None = None) -> dict:
+                  shared: list[dict] | None = None) -> dict:
     """user = {"origin": str, "destination": str, "constraints": {...}}. Returns the bot's result dict.
+
+    shared is the trip's ONE candidate set (computed once by the orchestrator). The bot operates the UI, but its
+    route is always optimize.top() over that set, so no UI quirk can change which route an objective gets.
 
     ctx is a browser context the bot owns exclusively (a fresh local context, or a Steel session's
     context) and closes when done.
@@ -60,7 +63,8 @@ async def run_bot(ctx: BrowserContext, key: str, user: dict, base_url: str, emit
     page = ctx.pages[0] if ctx.pages else await ctx.new_page()
     stop = asyncio.Event()
     frame_task = None
-    result = {"bot": key, "name": prof.name, "status": "FAILED", "route": None, "alternatives": [], "steps": steps, "brain": "rule", "error": None}
+    result = {"bot": key, "name": prof.name, "status": "FAILED", "route": None, "alternatives": [], "next_best": None,
+              "steps": steps, "brain": "rule", "error": None}
     try:
         await _emit(emit, {"type": "status", "bot": key, "status": "SCANNING"})
         await page.goto(f"{base_url}/planner?bot={key}", wait_until="domcontentloaded", timeout=60000)
@@ -68,7 +72,8 @@ async def run_bot(ctx: BrowserContext, key: str, user: dict, base_url: str, emit
         await page.wait_for_function("window.__4ward !== undefined", timeout=60000)  # React hydrated
         if stream_frames:
             frame_task = asyncio.create_task(_frames(page, key, emit, stop, 2.5))
-        brain = FallbackBrain(key, user, avoid_ids=avoid_ids)
+        brain = FallbackBrain(key, user, shared=shared)
+        shared_ids = {c["id"] for c in shared or [] if c.get("available")}
         result["brain"] = brain.name
         history: list[dict] = []
         for n in range(1, max_steps + 1):
@@ -83,18 +88,27 @@ async def run_bot(ctx: BrowserContext, key: str, user: dict, base_url: str, emit
                 steps.append(rec)
                 await _emit(emit, {"type": "step", "bot": key, **rec})
                 if rid:
-                    chosen = next((c for c in obs["candidates"] if c["id"] == rid), None)
-                    # Report this bot's own top 3, not just its winner, computed by the same
-                    # objective-specific scoring it used to pick -- a comparison, not a second search.
-                    top3 = scoring.rank(key, obs["candidates"], user["constraints"])[:3]
+                    pool = shared or obs["candidates"]  # the shared set is the single source of truth
+                    chosen = next((c for c in pool if c["id"] == rid), None)
+                    # This bot's own top 3 and its best DIFFERENT route ("next best for this goal"), from the
+                    # same ranking that picked its winner -- a comparison, not a second search.
+                    ranked = optimize.rank(key, pool, user["constraints"])
+                    top3 = ranked[:3]
                     for alt in top3:
                         alt["critic_violations"] = flags_for(alt, user["constraints"])
-                    result.update(status="DONE", route=chosen, alternatives=top3)
+                    nxt = next((c for c in ranked if chosen and c["id"] != chosen["id"]), None)
+                    # Did the page this bot operated show the same numbers as the engine's shared set? (live data
+                    # such as Bike Share can move between the two computations; the shared set stays the truth.)
+                    page_by_id = {c["id"]: c for c in obs["candidates"]}
+                    result["ui_mismatch"] = [c["id"] for c in (shared or []) if c.get("available") and (
+                        c["id"] not in page_by_id or abs((page_by_id[c["id"]].get("duration_min") or 0) - c["duration_min"]) > 0.15
+                        or abs((page_by_id[c["id"]].get("cost") or 0) - c["cost"]) > 0.01)]
+                    result.update(status="DONE", route=chosen, alternatives=top3, next_best=nxt)
                 else:
                     result["error"] = action.get("reason") or "no route"
                 break
             try:
-                validate(action, obs)
+                validate(action, obs, shared_ids)
                 loc = page.get_by_test_id(action["testid"]) if action["action"] != "wait" else None
                 if action["action"] == "type":
                     await loc.fill(action["text"], timeout=5000)

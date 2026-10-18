@@ -2,10 +2,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { API, Candidate, apiHeaders, runWebSocketUrl } from "@/lib/api";
-import { BOTS, BotKey, BotState, blankBots } from "@/lib/bots";
+import { BOTS, BotKey, BotState, blankBots, groupByRoute } from "@/lib/bots";
 import InsightsPanel from "@/components/InsightsPanel";
 import LivePanel from "@/components/LivePanel";
-import RouteCard from "@/components/RouteCard";
+import RouteCard, { StatusChip } from "@/components/RouteCard";
 import BotDrawer from "@/components/BotDrawer";
 import RouteSummary from "@/components/RouteSummary";
 import RouteChips from "@/components/RouteChips";
@@ -132,6 +132,7 @@ export default function Home() {
   const [showTtc, setShowTtc] = useState(false);
   const [bikeStations, setBikeStations] = useState<BikeStation[] | null>(null);
   const [insightsSeen, setInsightsSeen] = useState(false);
+  const [engineIssues, setEngineIssues] = useState<string[]>([]); // the optimum check failed: a bug in 4WARD, shown plainly
   const [sortBy, setSortBy] = useState<SortKey>("default"); // neutral card order only; nothing is ever highlighted by it
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -234,6 +235,7 @@ export default function Home() {
     setShowAll(false);
     setRouteView(null);
     setBots(blankBots());
+    setEngineIssues([]);
     setBudget(readBudget(text));
     // The backend compares deadlines with today's clock: a deadline tomorrow (without leaving tomorrow) cannot be checked.
     setDeadlineNote(
@@ -276,10 +278,12 @@ export default function Home() {
             },
           }));
         else if (ev.type === "result") {
-          patch(k, { status: ev.status, route: ev.route, alternatives: ev.alternatives, brain: ev.brain, elapsed: ev.elapsed_s, error: ev.error });
+          patch(k, { status: ev.status, route: ev.route, alternatives: ev.alternatives, nextBest: ev.next_best, brain: ev.brain, elapsed: ev.elapsed_s, error: ev.error });
           if (panelHiddenRef.current || tabRef.current === "map") setUnseen((u) => u + 1);
         }
+        else if (ev.type === "invariant_violation") setEngineIssues(ev.violations ?? []);
         else if (ev.type === "run_done") {
+          setEngineIssues(ev.result?.invariant_violations ?? []);
           setRunning(false);
           runIdRef.current = null;
           if (ev.status === "cancelled") {
@@ -321,17 +325,21 @@ export default function Home() {
     return [...BOTS].sort((a, b) => value(a.key) - value(b.key));
   }, [bots, sortBy]);
   routeViewRef.current = routeView;
+  // Bots that landed on the same route share one drawn line / marker, labelled with every objective it wins.
+  const routeGroups = useMemo(() => groupByRoute(BOTS, bots).filter((g) => bots[g[0].key].route), [bots]);
   const mapRoutes = useMemo(
     () =>
-      BOTS.filter((b) => bots[b.key].route && (!routeView || b.key === routeView)).map((b) => ({
-        id: b.key,
-        color: b.color,
-        label: b.name,
-        candidate: bots[b.key].route as Candidate,
-        emphasized: routeView ? true : highlight ? highlight === b.key : true,
-        visible: routeView ? true : !hiddenBots[b.key],
-      })),
-    [bots, highlight, hiddenBots, routeView],
+      routeGroups
+        .filter((g) => !routeView || g.some((b) => b.key === routeView))
+        .map((g) => ({
+          id: g[0].key,
+          color: g[0].color,
+          label: g.map((b) => b.name).join(" + "),
+          candidate: bots[g[0].key].route as Candidate,
+          emphasized: routeView ? true : highlight ? g.some((b) => b.key === highlight) : true,
+          visible: routeView ? true : g.some((b) => !hiddenBots[b.key]),
+        })),
+    [routeGroups, bots, highlight, hiddenBots, routeView],
   );
   // Modes the finished routes use, with the colour each is drawn in (TTC line colour for transit).
   const usedModes = useMemo(() => {
@@ -350,8 +358,8 @@ export default function Home() {
   const first = done[0] ? bots[done[0].key].route : null;
   const [timelapseOpen, setTimelapseOpen] = useState(false);
   const timelapseRoutes = useMemo(
-    () => done.map((b) => ({ key: b.key, name: b.name, color: b.color, candidate: bots[b.key].route as Candidate })),
-    [done, bots],
+    () => routeGroups.map((g) => ({ key: g[0].key, name: g.map((b) => b.name).join(" + "), color: g[0].color, candidate: bots[g[0].key].route as Candidate })),
+    [routeGroups, bots],
   );
 
   // keep routes inside the part of the map that is not covered by the panel / sheet
@@ -444,14 +452,14 @@ export default function Home() {
         />
       </div>
 
-      {highlight && done.length > 1 && !routeView && (
+      {highlight && routeGroups.length > 1 && !routeView && (
         <button
           type="button"
           data-testid="show-all-routes"
           onClick={showAllRoutes}
           className="absolute top-16 left-1/2 z-10 -translate-x-1/2 rounded-full bg-white px-4 py-2 text-xs font-semibold text-zinc-900 shadow-lg ring-1 ring-black/5 hover:bg-zinc-50 focus-visible:outline-2 focus-visible:outline-zinc-900 md:top-4"
         >
-          Show all {done.length} routes
+          Show all {routeGroups.length} routes
         </button>
       )}
 
@@ -505,7 +513,7 @@ export default function Home() {
           }}
           className="absolute bottom-20 left-1/2 z-10 -translate-x-1/2 rounded-full bg-zinc-900/90 px-3 py-1.5 text-xs font-medium text-white shadow-lg hover:bg-zinc-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-900 md:bottom-20"
         >
-          <span role="status">{done.length} of 4 routes ready.</span> Compare them
+          <span role="status">{done.length} of 4 bots finished.</span> Compare them
         </button>
       )}
       {routeView && bots[routeView].route && (
@@ -840,29 +848,61 @@ export default function Home() {
                 <option value="ontime">On-time % (highest first)</option>
               </select>
             </label>
-            {sortedBots.map((b) => (
-              <RouteCard
-                key={b.key}
-                bot={b}
-                state={bots[b.key]}
-                running={running}
-                budget={budget}
-                deadlineNote={deadlineNote}
-                focused={focus === b.key}
-                chosen={chosen === b.key}
-                onFocus={() => {
-                  setShowAll(focus === b.key); // clicking the open card again goes back to all routes
-                  setFocus((f) => (f === b.key ? null : b.key));
-                }}
-                onChoose={() => {
-                  setChosen(b.key);
-                  setFocus(b.key);
-                  setShowAll(false);
-                  setRouteView(b.key);
-                }}
-                onUseAlternative={(alt) => patch(b.key, { route: alt })}
-              />
-            ))}
+            {engineIssues.length > 0 && (
+              <div role="alert" data-testid="engine-check-failed" className="rounded-xl bg-red-50 p-3 text-xs text-red-900">
+                <p className="font-semibold">Engine check failed. This is a bug in 4WARD, not in your trip.</p>
+                <ul className="mt-1 list-disc pl-4">
+                  {engineIssues.map((v) => (
+                    <li key={v}>{v}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            <ul className="flex flex-col gap-1" data-testid="bot-rows" aria-label="The four bots">
+              {BOTS.map((b) => {
+                const s = bots[b.key];
+                const r = s.route;
+                return (
+                  <li key={b.key} data-testid={`bot-row-${b.key}`} className="flex items-center gap-2 text-xs text-zinc-700">
+                    <span aria-hidden className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: b.color }} />
+                    <span className="w-24 shrink-0 font-semibold text-zinc-900">{b.name}</span>
+                    <StatusChip botKey={b.key} state={s} />
+                    <span className="min-w-0 truncate">
+                      {r ? `${r.title}: ${Math.round(r.duration_min ?? 0)} min, $${(r.cost ?? 0).toFixed(2)}, ${(r.co2_kg ?? 0).toFixed(2)} kg` : s.status === "FAILED" ? s.error ?? "failed" : running ? "working…" : "waiting"}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+            {groupByRoute(sortedBots, bots).map((group) => {
+              const lead = group[0];
+              const members = group.map((b) => ({ bot: b, state: bots[b.key] }));
+              return (
+                <RouteCard
+                  key={group.map((b) => b.key).join("+")}
+                  bot={lead}
+                  state={bots[lead.key]}
+                  tags={members}
+                  running={running}
+                  budget={budget}
+                  deadlineNote={deadlineNote}
+                  focused={group.some((b) => b.key === focus)}
+                  chosen={group.some((b) => b.key === chosen)}
+                  onFocus={() => {
+                    const open = group.some((b) => b.key === focus);
+                    setShowAll(open); // clicking the open card again goes back to all routes
+                    setFocus(open ? null : lead.key);
+                  }}
+                  onChoose={() => {
+                    setChosen(lead.key);
+                    setFocus(lead.key);
+                    setShowAll(false);
+                    setRouteView(lead.key);
+                  }}
+                  onUseAlternative={(botKey, alt) => patch(botKey, { route: alt })}
+                />
+              );
+            })}
             <p className="text-[11px] leading-relaxed text-zinc-500">
               Numbers come from the routing engine, not the AI. Transit fares follow TTC rules; driving, parking, rideshare costs and traffic are estimated. Transit schedule data is from TTC GTFS.
             </p>

@@ -75,7 +75,11 @@ There is no "Best overall" bot, badge, highlight or recommendation anywhere in t
 ## Coordination (the agent part that matters)
 
 - Bots write results to a `bot_runs` table.
-- Diversity rule: if two bots return the same itinerary, the orchestrator reruns the lower priority bot with "must differ from route X in at least one leg."
+- One shared candidate set per trip: the orchestrator calls the engine once with every mode (`bots/orchestrate.py shared_candidates`). Each bot operates the dashboard, but its route is `bots/optimize.py` `top()` over that set, ranked by its one objective (Economic cost, Efficient door-to-door time, Environmental CO2e, Reliable on-time %), with explicit tie-breaks. Gemini operates the UI and never picks a different route than the engine's.
+- Eligibility is identical for all four bots (`optimize.eligible`): available, no violated hard constraint, within max(90 min, 2.5x the fastest route), bag-friendly when bags are given, meets the deadline when any route can. Relaxations are reported, never silent.
+- Invariants, checked on every trip by `optimize.check_invariants` and shown in the UI as "Engine check failed" if broken: Efficient's time, Economic's cost and Environmental's CO2e are each at most every eligible candidate's, and Reliable's on-time % is at least every candidate's that has an estimate.
+- No duplicate-avoidance rerun. If bots pick the same route, the UI shows one card tagged with every objective it wins, all four bots stay listed, and each bot's best different route is shown as "Next best for this goal".
+- Time is door to door everywhere (`duration_min`): walking, waits, transfers, plus estimated parking search and walk (`backend/config.py`).
 - Critic pass: after all bots finish, check each route against the user's constraints using engine output only. Flag violations in the UI.
 
 ## Ride-hail leg and fare scouts

@@ -51,7 +51,18 @@ def traffic_multiplier(hour: int) -> float:
         return 1.1
     return 1.0
 
-DOWNTOWN_BBOX = (43.630, 43.675, -79.420, -79.360)  # lat_min, lat_max, lon_min, lon_max
+# Door-to-door time includes the minutes a car trip spends finding a spot and walking from it. ESTIMATES
+# (no public live parking data); downtown is slower than elsewhere. Used by planner.py for drive and park & ride.
+PARKING_SEARCH_MIN = {"downtown": 8.0, "other": 3.0}
+PARKING_WALK_MIN = {"downtown": 4.0, "other": 2.0}
+PARK_RIDE_LOT_TO_PLATFORM_MIN = 4.0
+
+# Shared eligibility rule for ranking (bots/optimize.py): a route slower than max(MIN_CAP, FACTOR x the fastest
+# route) is not a practical option for ANY bot (stops "free" 12 hour walks winning on cost).
+PRACTICAL_MIN_CAP_MIN = 90
+PRACTICAL_FACTOR = 2.5
+
+DOWNTOWN_BBOX =(43.630, 43.675, -79.420, -79.360)  # lat_min, lat_max, lon_min, lon_max
 
 # Toronto + Durham, York, Peel, Halton regions (the conventional GTA, not GO's full reach into
 # Hamilton/Niagara/Waterloo/Simcoe -- chosen to comfortably include Oshawa, Milton, Newmarket and

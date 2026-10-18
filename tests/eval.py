@@ -45,7 +45,7 @@ PROMPTS = [
 
 
 def _fmt_table(rows: list[dict]) -> str:
-    cols = ["prompt", "success", "wall_s", "seq_equiv_s", "speedup_x", "avg_steps", "violations", "diversity_reruns"]
+    cols = ["prompt", "success", "wall_s", "seq_equiv_s", "speedup_x", "avg_steps", "violations", "engine_check_failures"]
     lines = ["| " + " | ".join(cols) + " |", "|" + "---|" * len(cols)]
     for r in rows:
         lines.append("| " + " | ".join(str(r[c]) for c in cols) + " |")
@@ -66,7 +66,7 @@ async def _run_one(prompt: str, keys: list[str]) -> dict:
     n_done = sum(1 for r in results if r.get("status") == "DONE")
     seq_equiv = round(sum(r.get("elapsed_s", 0) for r in results), 1)
     violations = sum(len(r.get("critic_violations") or []) for r in results)
-    reruns = sum(1 for e in events if e.get("type") == "diversity_rerun")
+    engine_failures = len(out.get("invariant_violations") or [])
     avg_steps = round(statistics.mean(len(r.get("steps") or []) for r in results), 1) if results else 0.0
 
     return {
@@ -77,7 +77,7 @@ async def _run_one(prompt: str, keys: list[str]) -> dict:
         "speedup_x": round(seq_equiv / wall_s, 2) if wall_s else "-",
         "avg_steps": avg_steps,
         "violations": violations,
-        "diversity_reruns": reruns,
+        "engine_check_failures": engine_failures,
         "_n_done": n_done,
         "_n_keys": len(keys),
         "_error": out.get("error"),
@@ -113,7 +113,7 @@ async def main() -> None:
         f"- Parallel speedup vs running the same {len(keys)} bots one after another: "
         f"{round(statistics.mean(speedups), 2) if speedups else '-'}x average\n"
         f"- Total constraint violations caught by the critic pass: {sum(r['violations'] for r in rows)}\n"
-        f"- Total diversity reruns triggered: {sum(r['diversity_reruns'] for r in rows)}\n"
+        f"- Total engine optimum-check failures (each bot must beat or tie every eligible route on its own metric): {sum(r['engine_check_failures'] for r in rows)}\n"
     )
 
     table = _fmt_table(rows)

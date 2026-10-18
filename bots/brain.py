@@ -3,20 +3,19 @@
 GeminiBrain asks Gemini for the next action as validated JSON. RuleBrain is a deterministic
 state-reconciler used when there is no key, and as a per-step fallback when Gemini errors or
 returns something invalid (so one bad model response never kills a bot).
+
+Neither brain ever decides which route wins: the pick is bots.optimize.top() over the ONE shared candidate set
+the orchestrator computed for the trip. The brains only operate the UI and then select/confirm that pick.
 """
 import asyncio
 import json
 import os
-from datetime import datetime, timedelta
 from typing import Literal
-from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel
 
-from . import scoring
+from . import optimize
 from .profiles import PROFILES, modes_for
-
-TORONTO = ZoneInfo("America/Toronto")
 
 ALL_MODES = ["walk", "bike", "ebike", "bikeshare", "drive", "rideshare", "transit", "park_ride"]
 FLAGS = ["no_presto", "has_car", "ev", "has_bike", "has_ebike", "avoid_stairs"]
@@ -34,44 +33,7 @@ def _control(page: dict, testid: str) -> dict | None:
     return next((c for c in page["controls"] if c["testid"] == testid), None)
 
 
-def _shift_hhmm(value: str, delta_min: int) -> str | None:
-    try:
-        t = datetime.strptime(value.strip(), "%H:%M")
-    except ValueError:
-        return None
-    return (t + timedelta(minutes=delta_min)).strftime("%H:%M")
-
-
-# A knob tuple is (kind, testid, text, reason, revert) where `revert` is the testid to click back
-# (for a "click" knob, e.g. a lot button) or the original text value to retype (for a "type" knob).
-Knob = tuple[str, str, str | None, str, str]
-
-
-def _knob_variant(page: dict) -> Knob | None:
-    """One alternative setting worth trying for a dimension the routing engine itself never searches
-    (which park & ride lot, what time to leave) -- never a transit/walk/bike/drive choice, those are
-    already provably optimal (Dijkstra / OSM). Returns None when there is nothing honest to try."""
-    lot_ctls = [c for c in page["controls"] if c["testid"].startswith("park-ride-lot-")]
-    if lot_ctls:
-        current = next((c["testid"] for c in lot_ctls if c.get("pressed") == "true"), "park-ride-lot-auto")
-        other = next((c["testid"] for c in lot_ctls if c["testid"] != current), None)
-        if other:
-            return ("click", other, None, "try a different park & ride lot", current)
-    depart_ctl = _control(page, "depart-at-input")
-    if depart_ctl is not None:
-        value = (depart_ctl.get("value") or "").strip()
-        if value:
-            shifted = _shift_hhmm(value, -15)
-            if shifted:
-                return ("type", "depart-at-input", shifted, "try leaving 15 min earlier", value)
-        else:
-            shifted = _shift_hhmm(datetime.now(TORONTO).strftime("%H:%M"), 15)
-            if shifted:
-                return ("type", "depart-at-input", shifted, "try leaving 15 min later than right now", value)
-    return None
-
-
-def validate(a: dict, page: dict) -> Action:
+def validate(a: dict, page: dict, extra_ids: set[str] | None = None) -> Action:
     act = Action(**a)
     if act.action in ("click", "type"):
         ctl = _control(page, act.testid or "")
@@ -79,32 +41,37 @@ def validate(a: dict, page: dict) -> Action:
             raise ValueError(f"unknown testid {act.testid!r}")
         if act.action == "type" and act.text is None:
             raise ValueError("type needs text")
-    if act.action == "finish":
-        ids = {c["id"] for c in page["candidates"] if c.get("available")}
+    if act.action == "finish" and act.route_id is not None:
+        ids = {c["id"] for c in page["candidates"] if c.get("available")} | (extra_ids or set())
         if act.route_id not in ids:
             raise ValueError(f"finish route_id {act.route_id!r} not an available route")
     return act
 
 
+def _keeps_shared_setup(a: dict, page: dict, want_modes: list[str]) -> None:
+    """All four bots must compute the same candidate set, so no bot may flip a travel-mode toggle away from
+    the shared setting (e.g. Gemini switching park & ride off 'because it is not relevant for cheap')."""
+    tid = a.get("testid") or ""
+    if a.get("action") == "click" and tid.startswith("mode-toggle-"):
+        ctl = _control(page, tid)
+        mode = tid[len("mode-toggle-"):]
+        if ctl is not None and (ctl.get("pressed") == "true") == (mode in want_modes):
+            raise ValueError(f"{tid} would change the shared mode set")
+
+
 class RuleBrain:
-    """Deterministic state-reconciler. After the first compute, it tries exactly one alternate setting
-    for a dimension the engine itself never searches (park & ride lot, departure time), compares the two
-    results with its own objective's scoring, and commits to whichever is actually better -- real,
-    bounded iteration, never a second guess at transit/walk/bike/drive routing."""
+    """Deterministic state-reconciler: sets up the shared trip in the UI, computes, then selects and confirms the
+    route the engine's per-objective ranking (bots.optimize) picked from the shared candidate set."""
 
     name = "rule"
 
-    def __init__(self, profile_key: str, user: dict, avoid_ids: set[str] | None = None):
+    def __init__(self, profile_key: str, user: dict, shared: list[dict] | None = None):
         self.p, self.user = profile_key, user
         self.want_modes = modes_for(profile_key, user["constraints"])
-        self.avoid_ids = avoid_ids or set()
-        self.explore = "baseline"  # baseline -> change -> await -> (revert -> await_revert) -> select
-        self.baseline: dict | None = None
-        self.variant: dict | None = None
-        self.knob: Knob | None = None
+        self.shared = shared
 
-    def _pool(self, page: dict) -> list[dict]:
-        return [cd for cd in page["candidates"] if cd["id"] not in self.avoid_ids] or page["candidates"]
+    def pool(self, page: dict) -> list[dict]:
+        return self.shared if self.shared else page["candidates"]
 
     def next_action(self, page: dict, history: list[dict]) -> dict:
         u, c = self.user, self.user["constraints"]
@@ -117,7 +84,7 @@ class RuleBrain:
                 ctl = _control(page, f"mode-toggle-{m}")
                 if ctl and (ctl.get("pressed") == "true") != (m in self.want_modes):
                     return {"action": "click", "testid": f"mode-toggle-{m}",
-                            "reason": f"{'enable' if m in self.want_modes else 'disable'} {m} for the {self.p} objective"}
+                            "reason": f"{'enable' if m in self.want_modes else 'disable'} {m} (every bot searches the same set of modes)"}
             for f in FLAGS:
                 ctl = _control(page, f"toggle-{f}")
                 if ctl and (ctl.get("pressed") == "true") != bool(c.get(f)):
@@ -127,7 +94,7 @@ class RuleBrain:
                 ctl = _control(page, tid)
                 if ctl and (ctl.get("value") or "") != want:
                     return {"action": "type", "testid": tid, "text": want, "reason": f"set {tid}"}
-            return {"action": "click", "testid": "compute-route", "reason": "compute routes for the chosen modes"}
+            return {"action": "click", "testid": "compute-route", "reason": "compute routes for the shared trip"}
         if page["state"] == "loading":
             return {"action": "wait", "reason": "routes are computing"}
         if page["state"] == "error":
@@ -135,52 +102,18 @@ class RuleBrain:
         if page["confirmed"]:
             return {"action": "finish", "route_id": page["confirmed"], "reason": "route confirmed"}
 
-        top = scoring.top(self.p, self._pool(page), c)
-
-        if self.explore == "baseline":
-            self.baseline = top
-            self.knob = _knob_variant(page) if top else None
-            if not self.knob:
-                self.explore = "select"
-            else:
-                self.explore = "await_variant"
-                kind, testid, text, reason, _revert = self.knob
-                return {"action": kind, "testid": testid, **({"text": text} if text is not None else {}), "reason": reason}
-
-        if self.explore == "await_variant":
-            self.explore = "variant_computing"
-            return {"action": "click", "testid": "compute-route", "reason": "recompute with that alternate setting to compare"}
-
-        if self.explore == "variant_computing":
-            self.variant = top
-            kind, testid, _text, _reason, revert = self.knob
-            winner = scoring.rank(self.p, [x for x in (self.baseline, self.variant) if x], c)
-            keep_variant = bool(winner) and self.variant and winner[0]["id"] == self.variant["id"]
-            if keep_variant or not self.baseline:
-                self.explore = "select"
-            else:
-                self.explore = "await_revert"
-                if kind == "click":
-                    return {"action": "click", "testid": revert, "reason": "revert: the original setting scored better for this objective"}
-                return {"action": "type", "testid": testid, "text": revert, "reason": "revert: the original setting scored better for this objective"}
-
-        if self.explore == "await_revert":
-            self.explore = "revert_computing"
-            return {"action": "click", "testid": "compute-route", "reason": "recompute after reverting"}
-
-        if self.explore == "revert_computing":
-            self.explore = "select"
-
+        pick = optimize.top(self.p, self.pool(page), c)
+        if not pick:
+            return {"action": "finish", "route_id": None, "reason": "no usable route found"}
+        why = f"{PROFILES[self.p].name} pick from the shared set: {pick['duration_min']} min, ${pick['cost']:.2f}, {pick['co2_kg']} kg CO2"
         if not page["selected"]:
-            top = scoring.top(self.p, self._pool(page), c)
-            if not top:
-                return {"action": "finish", "route_id": None, "reason": "no usable route found"}
-            return {"action": "click", "testid": f"select-route-{top['id']}",
-                    "reason": f"best for '{self.p}' by {PROFILES[self.p].name} scoring: {top['duration_min']} min, ${top['cost']:.2f}, {top['co2_kg']} kg CO2"}
+            if _control(page, f"select-route-{pick['id']}") is None:  # live data changed between the engine's run and the page's
+                return {"action": "finish", "route_id": pick["id"], "reason": f"{why} (not shown on the page; using the engine's route)"}
+            return {"action": "click", "testid": f"select-route-{pick['id']}", "reason": why}
         return {"action": "click", "testid": "confirm-route", "reason": "confirm the selected route"}
 
 
-SYSTEM = """You operate a route-planner web dashboard through a browser to find ONE route for a user.
+SYSTEM = """You operate a route-planner web dashboard through a browser for a user's trip.
 You are the "{name}" bot. Your objective: {objective}
 
 Each call you see the user's request and the current page (controls with data-testid, their state). Reply with a JSON
@@ -189,14 +122,13 @@ plan: {{"actions":[...]}} where each action is one of
   (each with a short "reason")
 Actions run in order in the browser. Rules:
 - Use only testids listed in `controls`. Typing replaces the field's value. aria-pressed "true" means a toggle is ON.
-- You are only ever asked to plan the SETUP (planner_state is "idle"): type origin and destination, turn ON only the
-  travel modes worth exploring for YOUR objective (and OFF the rest), turn on constraint toggles matching the user's
-  facts (has_car, no_presto, ...), set bags and times - and END the plan with click compute-route.
-- Do not plan anything after compute-route. The routing engine computes every candidate's real numbers itself
-  (Dijkstra for transit, OSM for walk/bike/drive), and deterministic code -- never an LLM guess -- explores the one
-  or two settings the engine can't search by itself (which park & ride lot, what time to leave), compares results
-  with your objective's own scoring formula, and picks, confirms, and finishes with whichever route actually wins.
-  That is intentional: you decide what to try, the engine's numbers decide what wins.
+- You are only ever asked to plan the SETUP (planner_state is "idle"): type origin and destination, set the constraint
+  toggles matching the user's facts (has_car, no_presto, ...), set bags and times - and END the plan with click compute-route.
+- Turn ON every travel-mode toggle (mode-toggle-*) that is OFF, and never turn one off. All four bots search the same
+  modes so their results are comparable; an action that turns a mode off is rejected, and so is computing while a mode
+  or constraint still differs from the user's request.
+- Do not plan anything after compute-route. The routing engine computes every candidate's real numbers, and deterministic
+  code ranks them by your objective and selects the winner. You never choose a different route than the engine's.
 - Do not repeat actions that already took effect.
 """
 
@@ -208,13 +140,12 @@ class Plan(BaseModel):
 class GeminiBrain:
     name = "gemini"
 
-    def __init__(self, profile_key: str, user: dict, avoid_ids: set[str] | None = None):
+    def __init__(self, profile_key: str, user: dict):
         from google import genai
 
         self.p, self.user = profile_key, user
         self.client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
         self.model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
-        self.avoid_ids = avoid_ids or set()
         prof = PROFILES[profile_key]
         self.system = SYSTEM.format(name=prof.name, objective=prof.objective)
 
@@ -252,8 +183,8 @@ class FallbackBrain:
     """Gemini plans a batch of actions per call (few API calls, rate-limit friendly); every action is validated against the
     live page right before it runs. Any error/invalid action drops the plan and the rule brain covers that step."""
 
-    def __init__(self, profile_key: str, user: dict, avoid_ids: set[str] | None = None):
-        self.rule = RuleBrain(profile_key, user, avoid_ids)
+    def __init__(self, profile_key: str, user: dict, shared: list[dict] | None = None):
+        self.rule = RuleBrain(profile_key, user, shared)
         self.gemini = None
         self.queue: list[dict] = []
         self.fallbacks = 0
@@ -261,18 +192,15 @@ class FallbackBrain:
         self.last_error = ""
         if os.environ.get("GEMINI_API_KEY") and os.environ.get("BOTS_BRAIN", "auto") != "rule":
             try:
-                self.gemini = GeminiBrain(profile_key, user, avoid_ids)
+                self.gemini = GeminiBrain(profile_key, user)
             except Exception as e:
                 self.last_error = str(e)[:200]
         self.name = "gemini" if self.gemini else "rule"
 
     async def next_action(self, page: dict, history: list[dict]) -> dict:
-        # Gemini only ever plans the SETUP (planner_state "idle"): which modes/constraints to try, given the
-        # user's request. The moment results exist, which route wins is always decided by the same deterministic
-        # reconciler every bot uses (RuleBrain's scoring.rank()/scoring.top()) -- never by asking an LLM to judge
-        # numbers it was only shown as text. That used to be a PHASE 3 Gemini call, and it was a real bug: Gemini's
-        # own "which is better" judgment could (and did) disagree with the engine's own scoring, making bots with
-        # very different objectives converge on the same wrong pick. See CLAUDE.md: "Numbers come from the engine.
+        # Gemini only ever plans the SETUP (planner_state "idle"). The moment results exist, which route wins is
+        # decided by bots.optimize (the shared candidate set ranked by this bot's one objective) -- never by asking
+        # an LLM to judge numbers it was only shown as text. See CLAUDE.md: "Numbers come from the engine.
         # Gemini decides what to try, never what the answer is."
         if self.gemini and page["state"] == "idle":
             try:
@@ -283,6 +211,11 @@ class FallbackBrain:
                         raise ValueError("empty plan")
                 a = self.queue.pop(0)
                 validate(a, page)
+                _keeps_shared_setup(a, page, self.rule.want_modes)
+                if a.get("action") == "click" and a.get("testid") == "compute-route":
+                    # Only compute once the setup matches the shared trip; otherwise the rule brain finishes the setup.
+                    if self.rule.next_action(page, history).get("testid") != "compute-route":
+                        raise ValueError("setup is incomplete; every mode and constraint must match the shared trip first")
                 return {**a, "brain": "gemini"}
             except Exception as e:
                 self.queue.clear()

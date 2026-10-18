@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 from pydantic import BaseModel, Field
 
 from . import bikeshare, fares, osm, pareto, reliability, transit
-from .config import SPEEDS_KMH, traffic_multiplier
+from .config import PARK_RIDE_LOT_TO_PLATFORM_MIN, PARKING_SEARCH_MIN, PARKING_WALK_MIN, SPEEDS_KMH, traffic_multiplier
 from .geo import haversine_km
 
 TORONTO = ZoneInfo("America/Toronto")
@@ -85,8 +85,18 @@ def _leg(mode, label, a, b, g: dict, cost=0.0, co2=0.0, dur=None, extra=None):
             "cost": round(cost, 2), "co2_kg": round(co2, 3), **(extra or {})}
 
 
+def _dwell_leg(label: str, at: tuple[float, float], minutes: float, walk_minutes: float) -> dict:
+    """A parking/dwell leg (find a spot and walk, lot to platform): `minutes` of door-to-door time of which
+    `walk_minutes` is walking. Keeps door-to-door time honest. Always an ESTIMATE."""
+    g = {"distance_km": round(SPEEDS_KMH["walk"] * walk_minutes / 60, 3), "duration_s": minutes * 60, "geometry": [list(at)],
+         "provenance": "estimated"}
+    return _leg("walk", label, at, at, g)
+
+
 def _finish(cand_id: str, title: str, legs: list[dict], c: Constraints, depart: datetime, hour: int,
             transfers: int, notes: list[str], extra_cost=0.0, extra: dict | None = None) -> dict:
+    # duration_min is DOOR TO DOOR: the sum of every leg incl. walking, waits, transfers, parking and dwell legs.
+    # It is the one time definition all four bots rank by.
     dur_s = sum(l["duration_s"] for l in legs)
     cost = round(sum(l.get("cost", 0) for l in legs) + extra_cost, 2)
     co2 = round(sum(l.get("co2_kg", 0) for l in legs), 3)
@@ -283,8 +293,12 @@ async def plan(origin: tuple[float, float], dest: tuple[float, float], c: Constr
             co2 = fares.emissions_kg("ev" if c.ev else "car", g["distance_km"])
             lg = _leg("car", f"Drive ({'EV' if c.ev else 'gas'})", origin, dest, g, fuel + park, co2, dur)
             lg["cost_breakdown"] = {"fuel_or_charge_and_wear": fuel, "parking": park}
-            out.append(_finish("drive", "Drive", [lg], c, depart, hour, 0,
+            zone = "downtown" if fares.in_downtown(dest[0], dest[1]) else "other"
+            park_min = PARKING_SEARCH_MIN[zone] + PARKING_WALK_MIN[zone]
+            park_leg = _dwell_leg("Find parking and walk to destination (estimated)", dest, park_min, PARKING_WALK_MIN[zone])
+            out.append(_finish("drive", "Drive", [lg, park_leg], c, depart, hour, 0,
                                [f"Parking ${park:.2f} (estimated rate), {int(prob*100)}% chance of finding a spot quickly (estimate)",
+                                f"Includes about {park_min:.0f} min to find parking and walk (estimate)",
                                 f"Traffic factor x{tm} for {hour:02d}:00 (typical-day estimate, not live)"],
                                extra={"parking_find_probability": prob}))
 
@@ -336,8 +350,9 @@ async def plan(origin: tuple[float, float], dest: tuple[float, float], c: Constr
             lot_fee = float(fares.A["go_lot_parking_day" if kind == "go_train" else "ttc_lot_parking_day"]["value"])
             drive_cost = fares.driving_cost(d1["distance_km"], c.ev) + lot_fee
             legs = [_leg("car", f"Drive to {name}", origin, lp, d1, drive_cost,
-                         fares.emissions_kg("ev" if c.ev else "car", d1["distance_km"]), dur)] + opt["legs"][1:]
-            transit_legs = legs[1:]
+                         fares.emissions_kg("ev" if c.ev else "car", d1["distance_km"]), dur),
+                    _dwell_leg(f"Park and walk to the {name} platform (estimated)", lp, PARK_RIDE_LOT_TO_PLATFORM_MIN, PARK_RIDE_LOT_TO_PLATFORM_MIN)] + opt["legs"][1:]
+            transit_legs = legs[2:]
             transit_min = sum(l["duration_s"] for l in transit_legs) / 60
             fare_notes = _apply_transit_fare(transit_legs, c, opt["boardings"], transit_min)
             lot_note = f"Park at {name} (lot fee is an estimate)" if lot_fee else f"Park at {name} (usually free for PRESTO riders, verify)"

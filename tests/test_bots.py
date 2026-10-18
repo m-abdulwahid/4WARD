@@ -1,7 +1,7 @@
 import pytest
 
-from bots import critic, nlp, scoring
-from bots.brain import FallbackBrain, RuleBrain, _knob_variant, _shift_hhmm, validate
+from bots import critic, nlp, optimize
+from bots.brain import FallbackBrain, RuleBrain, validate
 from bots.profiles import modes_for
 
 
@@ -14,35 +14,28 @@ CANDS = [cand("walk", 200, 0, 0, walk=15000, bag=0.2), cand("rail", 46, 3.3, 0.6
          cand("bikeshare", 50, 8, 0, bag=0.2), cand("late_fast", 20, 40, 5, deadline=False)]
 
 
-def test_each_objective_picks_a_different_winner():
+def test_each_objective_picks_its_own_optimum():
     c = {"bags": 0}
-    assert scoring.top("cheap", CANDS, c)["id"] == "rail"      # walk is free but impractical (200 min)
-    assert scoring.top("fastest", CANDS, c)["id"] == "drive"   # late_fast misses the deadline
-    assert scoring.top("green", CANDS, c)["id"] == "bikeshare"
+    assert optimize.top("cheap", CANDS, c)["id"] == "rail"      # walk is free but impractical (200 min)
+    assert optimize.top("fastest", CANDS, c)["id"] == "drive"   # late_fast misses the deadline
+    assert optimize.top("green", CANDS, c)["id"] == "bikeshare"
 
 
 def test_bags_exclude_bag_hostile_routes():
-    assert scoring.top("green", CANDS, {"bags": 2})["id"] == "rail"
+    assert optimize.top("green", CANDS, {"bags": 2})["id"] == "rail"
 
 
 def test_unavailable_and_no_routes():
-    assert scoring.top("cheap", [{"id": "x", "available": False}], {}) is None
+    assert optimize.top("cheap", [{"id": "x", "available": False}], {}) is None
 
 
-def test_reliability_breaks_a_near_tie_toward_the_more_reliable_option():
-    """Two near-identical-time options for 'fastest': the one Tiger Data shows as flaky loses,
-    but only once there's enough history behind that signal to trust it."""
-    fast_unreliable = {**cand("fast_flaky", 20, 5, 1), "reliability": {"reliability_pct": 40, "history_days": 14}}
-    fast_reliable = {**cand("fast_solid", 21, 5, 1), "reliability": {"reliability_pct": 95, "history_days": 14}}
-    assert scoring.top("fastest", [fast_unreliable, fast_reliable], {"bags": 0})["id"] == "fast_solid"
-
-
-def test_reliability_barely_matters_with_thin_history():
-    """One matching historical day is not enough signal to flip a close call -- the raw time/cost
-    difference should still decide it, exactly like before reliability existed."""
-    fast_flaky_thin_history = {**cand("fast_flaky", 20, 5, 1), "reliability": {"reliability_pct": 0, "history_days": 1}}
-    slightly_slower = {**cand("slightly_slower", 21, 5, 1)}
-    assert scoring.top("fastest", [fast_flaky_thin_history, slightly_slower], {"bags": 0})["id"] == "fast_flaky"
+def test_efficient_is_pure_time_and_ignores_reliability():
+    """Regression for the Phase 0 bug: Efficient used to add a reliability penalty and picked a 45 min drive over a
+    40 min transit route that Best overall then beat it with. Efficient must take the faster route."""
+    drive = cand("drive", 45, 14.0, 4.1)
+    transit = {**cand("transit", 40, 3.3, 0.6), "reliability": {"reliability_pct": 50, "history_days": 14}}
+    assert optimize.top("fastest", [drive, transit], {"bags": 0})["id"] == "transit"
+    assert optimize.top("reliable", [drive, transit], {"bags": 0})["id"] == "transit"  # only one with an estimate
 
 
 def test_reliable_bot_ranks_by_on_time_percentage_then_time_then_cost():
@@ -52,12 +45,12 @@ def test_reliable_bot_ranks_by_on_time_percentage_then_time_then_cost():
     solid_slow = rel(cand("solid_slow", 50, 3, 1), 95)
     flaky_fast = rel(cand("flaky_fast", 20, 3, 1), 60)
     no_data = cand("no_data", 10, 1, 0)  # fastest of all, but no on-time estimate: never ranks as a made-up 100%
-    ranked = scoring.rank("reliable", [flaky_fast, no_data, solid_slow], {"bags": 0})
+    ranked = optimize.rank("reliable", [flaky_fast, no_data, solid_slow], {"bags": 0})
     assert [c["id"] for c in ranked] == ["solid_slow", "flaky_fast", "no_data"]
     tie_slow, tie_fast = rel(cand("tie_slow", 40, 3, 1), 90), rel(cand("tie_fast", 30, 9, 1), 90)
-    assert scoring.top("reliable", [tie_slow, tie_fast], {"bags": 0})["id"] == "tie_fast"
+    assert optimize.top("reliable", [tie_slow, tie_fast], {"bags": 0})["id"] == "tie_fast"
     tie_cheap, tie_dear = rel(cand("tie_cheap", 30, 3, 1), 90), rel(cand("tie_dear", 30, 9, 1), 90)
-    assert scoring.top("reliable", [tie_dear, tie_cheap], {"bags": 0})["id"] == "tie_cheap"
+    assert optimize.top("reliable", [tie_dear, tie_cheap], {"bags": 0})["id"] == "tie_cheap"
 
 
 def test_no_best_overall_profile_remains():
@@ -65,13 +58,6 @@ def test_no_best_overall_profile_remains():
 
     assert list(PROFILES) == ["cheap", "fastest", "green", "reliable"]
     assert [p.name for p in PROFILES.values()] == ["Economic", "Efficient", "Environmental", "Reliable"]
-
-
-def test_reliability_penalty_pure_function():
-    assert scoring._reliability_penalty({}) == 0.0
-    assert scoring._reliability_penalty({"reliability": {"reliability_pct": 100, "history_days": 30}}) == 0.0
-    assert scoring._reliability_penalty({"reliability": {"reliability_pct": 50, "history_days": 7}}) == pytest.approx(0.25)
-    assert scoring._reliability_penalty({"reliability": {"reliability_pct": 50, "history_days": 28}}) == pytest.approx(0.5)
 
 
 def test_parse_rules():
@@ -84,11 +70,11 @@ def test_parse_rules():
     assert r["constraints"]["depart_at"] == "07:30" and r["constraints"]["bags"] == 1 and r["constraints"]["has_ebike"]
 
 
-def test_modes_follow_constraints():
-    assert "drive" not in modes_for("fastest", {"has_car": False})
-    assert "rideshare" in modes_for("fastest", {"has_car": False})
-    assert "drive" in modes_for("fastest", {"has_car": True})
-    assert "drive" not in modes_for("cheap", {"has_car": True})
+def test_every_bot_searches_the_same_modes():
+    sets = {k: modes_for(k, {"has_car": True}) for k in ("cheap", "fastest", "green", "reliable")}
+    assert len({tuple(v) for v in sets.values()}) == 1
+    assert {"drive", "rideshare", "park_ride", "transit", "walk"} <= set(sets["cheap"])
+    assert modes_for("cheap", {"has_car": False}) == modes_for("fastest", {"has_car": False})
 
 
 PAGE = {"controls": [{"testid": "origin-input", "value": ""}, {"testid": "compute-route"}], "state": "idle", "error": "",
@@ -102,6 +88,7 @@ def test_validate_rejects_bad_actions():
         validate({"action": "type", "testid": "origin-input"}, PAGE)
     with pytest.raises(ValueError):
         validate({"action": "finish", "route_id": "ghost"}, PAGE)
+    assert validate({"action": "finish", "route_id": "ghost"}, PAGE, {"ghost"}).route_id == "ghost"  # in the shared set
     assert validate({"action": "click", "testid": "compute-route"}, PAGE).action == "click"
 
 
@@ -111,78 +98,30 @@ def test_rule_brain_types_origin_first():
     assert a["action"] == "type" and a["testid"] == "origin-input" and a["text"] == "Union Station"
 
 
-def test_rule_brain_respects_avoid_ids():
-    """Diversity rule: a bot told to avoid an id picks the next-best candidate instead."""
+def _done_page(candidates, controls=()):
+    return {**PAGE, "controls": PAGE["controls"] + list(controls), "state": "done", "candidates": candidates}
+
+
+def test_rule_brain_selects_the_engines_pick_from_the_shared_set():
+    """The page may show different candidates (live data moved); the pick still comes from the shared set."""
     user = {"origin": "a", "destination": "b", "constraints": {"bags": 0}}
-    page = {**PAGE, "state": "done", "selected": None, "confirmed": None, "candidates": CANDS}
-    top = RuleBrain("cheap", user).next_action(page, [])
-    assert top["testid"] == "select-route-rail"
-    avoided = RuleBrain("cheap", user, avoid_ids={"rail"}).next_action(page, [])
-    assert avoided["testid"] != "select-route-rail"
+    page = _done_page([cand("only_on_page", 10, 99, 9)], controls=[{"testid": "select-route-rail"}])
+    a = RuleBrain("cheap", user, shared=CANDS).next_action(page, [])
+    assert a["testid"] == "select-route-rail"
 
 
-def test_rule_brain_avoid_ids_falls_back_when_pool_empties():
-    """If every candidate is avoided, don't strand the bot with no choice at all."""
+def test_rule_brain_finishes_with_engine_route_when_page_cannot_show_it():
     user = {"origin": "a", "destination": "b", "constraints": {"bags": 0}}
-    page = {**PAGE, "state": "done", "selected": None, "confirmed": None, "candidates": CANDS}
-    all_ids = {c["id"] for c in CANDS}
-    a = RuleBrain("cheap", user, avoid_ids=all_ids).next_action(page, [])
-    assert a["action"] == "click" and a["testid"].startswith("select-route-")
+    a = RuleBrain("cheap", user, shared=CANDS).next_action(_done_page([cand("other", 10, 99, 9)]), [])
+    assert a["action"] == "finish" and a["route_id"] == "rail"
 
 
-def test_shift_hhmm():
-    assert _shift_hhmm("08:00", -15) == "07:45"
-    assert _shift_hhmm("00:05", -15) == "23:50"
-    assert _shift_hhmm("not-a-time", -15) is None
-
-
-def test_knob_variant_prefers_lot_over_depart_time():
-    page = {**PAGE, "controls": PAGE["controls"]
-            + [{"testid": "depart-at-input", "value": "08:00"},
-               {"testid": "park-ride-lot-auto", "pressed": "true"}, {"testid": "park-ride-lot-finch", "pressed": "false"}]}
-    assert _knob_variant(page) == ("click", "park-ride-lot-finch", None, "try a different park & ride lot", "park-ride-lot-auto")
-
-
-def test_knob_variant_none_when_no_knob_controls_present():
-    assert _knob_variant(PAGE) is None
-
-
-VARIANT_BETTER = [cand("rail_fast", 40, 1.0, 0.5)]
-VARIANT_WORSE = [cand("rail_slow", 90, 10.0, 2.0)]
-
-
-def test_rule_brain_explores_depart_time_and_keeps_better_variant():
-    """A real, bounded iteration: try leaving 15 min earlier, recompute, and keep it since it won."""
+def test_rule_brain_never_reruns_or_explores_alternate_settings():
+    """The old explore-and-revert 'knob' changed departure times per bot and broke comparability."""
     user = {"origin": "a", "destination": "b", "constraints": {"bags": 0}}
-    page = {**PAGE, "controls": PAGE["controls"] + [{"testid": "depart-at-input", "value": "08:00"}],
-            "state": "done", "selected": None, "confirmed": None, "candidates": CANDS}
-    rb = RuleBrain("cheap", user)
-    a1 = rb.next_action(page, [])
-    assert a1 == {"action": "type", "testid": "depart-at-input", "text": "07:45", "reason": "try leaving 15 min earlier"}
-    a2 = rb.next_action(page, [])
-    assert a2["action"] == "click" and a2["testid"] == "compute-route"
-    variant_page = {**page, "candidates": VARIANT_BETTER}
-    a3 = rb.next_action(variant_page, [])
-    assert a3["testid"] == "select-route-rail_fast"
-
-
-def test_rule_brain_explores_depart_time_and_reverts_when_worse():
-    """If the alternative is worse for this objective, undo it instead of settling for it."""
-    user = {"origin": "a", "destination": "b", "constraints": {"bags": 0}}
-    page = {**PAGE, "controls": PAGE["controls"] + [{"testid": "depart-at-input", "value": "08:00"}],
-            "state": "done", "selected": None, "confirmed": None, "candidates": CANDS}
-    rb = RuleBrain("cheap", user)
-    rb.next_action(page, [])  # types the alternate departure time
-    rb.next_action(page, [])  # clicks compute-route
-    variant_page = {**page, "candidates": VARIANT_WORSE}
-    a3 = rb.next_action(variant_page, [])
-    assert a3 == {"action": "type", "testid": "depart-at-input", "text": "08:00",
-                  "reason": "revert: the original setting scored better for this objective"}
-    a4 = rb.next_action(variant_page, [])
-    assert a4["action"] == "click" and a4["testid"] == "compute-route"
-    reverted_page = {**page, "candidates": CANDS}
-    a5 = rb.next_action(reverted_page, [])
-    assert a5["testid"] == "select-route-rail"
+    page = _done_page(CANDS, controls=[{"testid": "depart-at-input", "value": "08:00"}, {"testid": "select-route-rail"}])
+    a = RuleBrain("cheap", user).next_action(page, [])
+    assert a["testid"] == "select-route-rail"
 
 
 def test_critic_flags_deadline_and_walk_and_bags():
@@ -235,13 +174,48 @@ async def test_fallback_to_rule_brain_when_gemini_breaks(monkeypatch):
 
         async def next_actions(self, page, history):
             Good.calls += 1
-            return [{"action": "click", "testid": "compute-route", "reason": "go"},
-                    {"action": "type", "testid": "origin-input", "text": "x"}]
+            return [{"action": "type", "testid": "origin-input", "text": "Union Station", "reason": "go"},
+                    {"action": "type", "testid": "origin-input", "text": "Union Station", "reason": "again"}]
 
     b.gemini = Good()
     assert (await b.next_action(PAGE, []))["brain"] == "gemini"
-    assert (await b.next_action(PAGE, []))["testid"] == "origin-input"   # second action comes from the queued plan
+    assert (await b.next_action(PAGE, []))["reason"] == "again"          # second action comes from the queued plan
     assert Good.calls == 1                                                # one API call served two steps
+
+
+@pytest.mark.asyncio
+async def test_gemini_cannot_change_the_shared_mode_set(monkeypatch):
+    """If Gemini switches a mode OFF 'because it is irrelevant for this objective', that action is rejected and the
+    rule brain takes over, so all four bots still compute the same candidate set."""
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    user = {"origin": "a", "destination": "b", "constraints": {}}
+    page = {**PAGE, "controls": PAGE["controls"] + [{"testid": "mode-toggle-park_ride", "pressed": "true"}]}
+    b = FallbackBrain("cheap", user)
+
+    class TurnsModeOff:
+        async def next_actions(self, page, history):
+            return [{"action": "click", "testid": "mode-toggle-park_ride", "reason": "not relevant for cheap"}]
+
+    b.gemini = TurnsModeOff()
+    a = await b.next_action(page, [])
+    assert a["brain"] == "rule" and b.fallbacks == 1 and a["testid"] != "mode-toggle-park_ride"
+
+
+@pytest.mark.asyncio
+async def test_gemini_cannot_compute_before_the_shared_setup_is_complete(monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    user = {"origin": "a", "destination": "b", "constraints": {}}
+    page = {**PAGE, "controls": [{"testid": "origin-input", "value": "a"}, {"testid": "destination-input", "value": "b"},
+                                 {"testid": "mode-toggle-rideshare", "pressed": "false"}, {"testid": "compute-route"}]}
+    b = FallbackBrain("cheap", user)
+
+    class ComputesEarly:
+        async def next_actions(self, page, history):
+            return [{"action": "click", "testid": "compute-route", "reason": "go"}]
+
+    b.gemini = ComputesEarly()
+    a = await b.next_action(page, [])
+    assert a["brain"] == "rule" and a["testid"] == "mode-toggle-rideshare"  # the rule brain turns the missing mode on
 
 
 def test_gemini_brain_builds_offline(monkeypatch):

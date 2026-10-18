@@ -29,6 +29,7 @@ export function StatusChip({ botKey, state }: { botKey: BotKey; state: BotState 
 export default function RouteCard({
   bot,
   state,
+  tags,
   running,
   budget = null,
   deadlineNote = null,
@@ -38,8 +39,9 @@ export default function RouteCard({
   onChoose,
   onUseAlternative,
 }: {
-  bot: Bot;
+  bot: Bot; // the lead bot of this card (first of the bots that picked this route)
   state: BotState;
+  tags: { bot: Bot; state: BotState }[]; // every bot whose pick is this route, lead first
   running: boolean;
   budget?: number | null; // from the user's prompt; compared against the engine's cost
   deadlineNote?: string | null; // replaces the deadline verdict when the engine cannot judge it (deadline tomorrow)
@@ -47,7 +49,7 @@ export default function RouteCard({
   chosen: boolean;
   onFocus: () => void;
   onChoose: () => void;
-  onUseAlternative: (alt: Candidate) => void;
+  onUseAlternative: (botKey: BotKey, alt: Candidate) => void;
 }) {
   const r = state.route;
   return (
@@ -68,7 +70,7 @@ export default function RouteCard({
           <div className="flex min-w-0 items-start gap-2">
             <span aria-hidden className="mt-1 h-3 w-3 shrink-0 rounded-full" style={{ background: bot.color }} />
             <div className="min-w-0">
-              <h3 className="truncate text-sm font-semibold text-zinc-900">{bot.name}</h3>
+              <h3 className="text-sm font-semibold text-zinc-900" data-testid={`tags-${bot.key}`}>{r ? tags.map((t) => t.bot.name).join(" · ") : bot.name}</h3>
               <p className="truncate text-xs text-zinc-500">{r ? r.title : bot.blurb}</p>
               {r && r.legs.length > 0 && (
                 <p className="mt-1 flex items-center gap-0.5" data-testid={`modes-${bot.key}`}>
@@ -104,15 +106,6 @@ export default function RouteCard({
             Over your ${budget.toFixed(2)} budget
           </p>
         )}
-        {r?.pareto_optimal && (
-          <p
-            data-testid={`pareto-${bot.key}`}
-            title="No other computed route beats this one on time, cost, CO2, transfers, and walking distance all at once."
-            className="mt-2 inline-block rounded-full bg-zinc-900 px-2 py-0.5 text-[11px] font-semibold text-white"
-          >
-            Pareto-optimal
-          </p>
-        )}
         {r ? null : state.status === "FAILED" ? (
           <p className="mt-2 text-xs text-red-700">Failed: {state.error ?? "unknown error"}. The other bots are unaffected.</p>
         ) : (
@@ -145,6 +138,27 @@ export default function RouteCard({
                   ? `Reliability: made it on ${r.reliability.reliability_pct}% of the last ${r.reliability.history_days} matching day(s) (${r.reliability.basis}, from TTC delay history).`
                   : "Reliability: not enough TTC delay history yet for this route and time."}
               </p>
+              {tags.some((t) => t.state.nextBest) && (
+                <ul className="mt-3 flex flex-col gap-1 border-t border-zinc-100 pt-2" data-testid={`next-best-${bot.key}`}>
+                  {tags.map((t) =>
+                    t.state.nextBest ? (
+                      <li key={t.bot.key} className="flex items-center justify-between gap-2 text-xs text-zinc-600">
+                        <span className="min-w-0">
+                          <span className="font-semibold text-zinc-800">Next best for {t.bot.name}:</span> {t.state.nextBest.title}, {Math.round(t.state.nextBest.duration_min ?? 0)} min, ${(t.state.nextBest.cost ?? 0).toFixed(2)}, {(t.state.nextBest.co2_kg ?? 0).toFixed(2)} kg
+                        </span>
+                        <button
+                          type="button"
+                          data-testid={`use-next-${t.bot.key}`}
+                          onClick={() => onUseAlternative(t.bot.key, t.state.nextBest as Candidate)}
+                          className="shrink-0 rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-semibold text-zinc-800 hover:bg-zinc-200 focus-visible:outline-2 focus-visible:outline-zinc-900"
+                        >
+                          Use this
+                        </button>
+                      </li>
+                    ) : null,
+                  )}
+                </ul>
+              )}
               {state.alternatives && state.alternatives.length > 1 && (
                 <div className="mt-3 border-t border-zinc-100 pt-2">
                   <p className="text-[11px] font-semibold text-zinc-500">{bot.name}'s other options, ranked the same way it picked this one</p>
@@ -174,7 +188,7 @@ export default function RouteCard({
                                 <button
                                   type="button"
                                   data-testid={`use-alt-${bot.key}-${alt.id}`}
-                                  onClick={() => onUseAlternative(alt)}
+                                  onClick={() => onUseAlternative(bot.key, alt)}
                                   className="rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-semibold text-zinc-800 hover:bg-zinc-200 focus-visible:outline-2 focus-visible:outline-zinc-900"
                                 >
                                   Use this

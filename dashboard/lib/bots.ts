@@ -9,6 +9,29 @@ export const BOTS = [
   { key: "reliable", name: "Reliable", color: "#7c3aed", blurb: "Most likely to arrive on time" },
 ] as const;
 export type BotKey = (typeof BOTS)[number]["key"];
+export type BotInfo = (typeof BOTS)[number];
+
+/** Bots whose finished route is the same route (same id) share one group, in the order given. Bots with no
+ * route each get their own group so a failed bot is never hidden. */
+export function groupByRoute(order: readonly BotInfo[], bots: Record<BotKey, BotState>): BotInfo[][] {
+  const groups: BotInfo[][] = [];
+  const byRoute = new Map<string, BotInfo[]>();
+  for (const b of order) {
+    const r = bots[b.key].route;
+    if (!r) {
+      groups.push([b]);
+      continue;
+    }
+    const g = byRoute.get(r.id);
+    if (g) g.push(b);
+    else {
+      const fresh = [b];
+      byRoute.set(r.id, fresh);
+      groups.push(fresh);
+    }
+  }
+  return groups;
+}
 
 export type BotStatus = "WAITING" | "SCANNING" | "ROUTING" | "DONE" | "FAILED";
 
@@ -32,6 +55,7 @@ export type BotState = {
   elapsed?: number;
   route?: Candidate | null;
   alternatives?: Candidate[];
+  nextBest?: Candidate | null; // this bot's best DIFFERENT route for its own goal
   error?: string | null;
 };
 
