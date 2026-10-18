@@ -40,8 +40,9 @@ def _sort_key(profile: str, c: dict) -> tuple:
 def eligible(cands: list[dict], constraints: dict) -> tuple[list[dict], list[str]]:
     """The set every bot ranks: hard constraints applied identically for all four.
 
-    Returns (pool, relaxed) where `relaxed` names any soft rule that had to be dropped because nothing passed it
-    (shown to the user, never silent). Order: usable -> practical time cap -> bags -> deadline.
+    Returns (pool, relaxed) where `relaxed` names any soft rule that had to be dropped because nothing passed it,
+    or that narrowed every bot down to the same single option (shown to the user, never silent). Order: usable ->
+    practical time cap -> bags -> deadline.
     """
     relaxed: list[str] = []
     pool = [c for c in cands if c.get("available") and c.get("duration_min") is not None and c.get("cost") is not None
@@ -58,6 +59,11 @@ def eligible(cands: list[dict], constraints: dict) -> tuple[list[dict], list[str
             relaxed.append("Every route is hard to manage with your bags")
     ok = [c for c in pool if c.get("meets_deadline", True)]
     if ok:
+        # Every bot ranks this same shared pool, so when the deadline leaves only one option, all four land on
+        # it -- not a diversity bug, the deadline itself removed the choice. Say so instead of leaving it silent.
+        if len(ok) == 1 and len(pool) > 1:
+            relaxed.append(f"Only {ok[0]['title']} makes your deadline, so all four bots land on it -- "
+                            "the other ways to go were too slow, not ruled out for any other reason")
         pool = ok
     else:
         relaxed.append("No route makes your deadline")
@@ -87,6 +93,21 @@ def next_best(profile: str, cands: list[dict], constraints: dict) -> dict | None
 
 def picks(cands: list[dict], constraints: dict) -> dict[str, dict | None]:
     return {p: top(p, cands, constraints) for p in PROFILES}
+
+
+def convergence_note(chosen: dict[str, dict | None], pool: list[dict]) -> str | None:
+    """All four bots can honestly agree two ways: the deadline (or another hard rule) left only one eligible
+    option (eligible() already explains that in `relaxed`), or one real option is simply better on every
+    measure. The second case needs its own explanation, or it reads the same as a diversity bug: four bots,
+    one answer, no reason given. None when the bots didn't actually all agree, or when there was never a
+    second eligible option to prefer it over."""
+    ids = {c["id"] for c in chosen.values() if c}
+    if len(ids) != 1 or len({c["id"] for c in pool}) < 2:
+        return None
+    winner = next((c for c in pool if c["id"] == next(iter(ids))), None)
+    if not winner:
+        return None
+    return f"{winner['title']} is the better pick on every measure for this trip right now, so all four bots agree."
 
 
 def tags(chosen: dict[str, dict | None]) -> dict[str, list[str]]:

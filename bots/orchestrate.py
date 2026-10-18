@@ -166,7 +166,10 @@ async def run_all(prompt: str, emit: Emit | None = None, base_url: str | None = 
     violations = optimize.check_invariants(chosen, shared, user["constraints"])
     if violations:
         await _emit(emit, {"type": "invariant_violation", "violations": violations})
-    _, relaxed = optimize.eligible(shared, user["constraints"])
+    pool, relaxed = optimize.eligible(shared, user["constraints"])
+    note = optimize.convergence_note(chosen, pool)
+    if note:
+        relaxed = relaxed + [note]
     return {"parsed": user, "results": results, "elapsed_s": round(time.time() - t0, 1),
             "points": points, "candidates": [_summary(c) for c in shared], "relaxed": relaxed,
             "invariant_violations": violations, "route_tags": optimize.tags(chosen)}

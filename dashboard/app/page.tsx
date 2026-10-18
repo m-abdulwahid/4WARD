@@ -113,6 +113,7 @@ export default function Home() {
   const [showTtc, setShowTtc] = useState(false);
   const [bikeStations, setBikeStations] = useState<BikeStation[] | null>(null);
   const [engineIssues, setEngineIssues] = useState<string[]>([]); // the optimum check failed: a bug in 4WARD, shown plainly
+  const [relaxed, setRelaxed] = useState<string[]>([]); // a soft rule the engine had to drop, or a constraint that left every bot with the same one option
   const [sortBy, setSortBy] = useState<SortKey>("default"); // neutral card order only; nothing is ever highlighted by it
   const [drawer, setDrawer] = useState(false);
   const [timelapseOpen, setTimelapseOpen] = useState(false);
@@ -212,6 +213,7 @@ export default function Home() {
     setShowAll(false);
     setBots(blankBots());
     setEngineIssues([]);
+    setRelaxed([]);
     setBudget(readBudget(text));
     // The backend compares deadlines with today's clock: a deadline tomorrow (without leaving tomorrow) cannot be checked.
     setDeadlineNote(
@@ -258,6 +260,7 @@ export default function Home() {
         else if (ev.type === "invariant_violation") setEngineIssues(ev.violations ?? []);
         else if (ev.type === "run_done") {
           setEngineIssues(ev.result?.invariant_violations ?? []);
+          setRelaxed(ev.result?.relaxed ?? []);
           setClarify(ev.result?.clarify ?? []);
           setRunning(false);
           runIdRef.current = null;
@@ -659,6 +662,15 @@ export default function Home() {
                 })}
               </ul>
 
+              {relaxed.length > 0 && (
+                <ul data-testid="relaxed-notice" className="flex flex-col gap-1.5">
+                  {relaxed.map((r) => (
+                    <li key={r} role="status" className="rounded-xl bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900 ring-1 ring-amber-200">
+                      {r}
+                    </li>
+                  ))}
+                </ul>
+              )}
               {fit.fallback && (
                 <p role="status" data-testid="fit-notice" className="rounded-xl bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900 ring-1 ring-amber-200">
                   {fit.fallback.kind === "deadline"
