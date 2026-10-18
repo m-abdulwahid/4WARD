@@ -31,7 +31,8 @@ export type Leg = {
   arrive_at?: string;
   wait_s?: number; // waiting for a vehicle or a pickup before the leg moves
   scheduled?: boolean; // transit leg timed from a real GTFS departure (false/absent: ESTIMATED headway)
-  traffic_source?: string;
+  traffic_source?: string; // e.g. "TomTom live (not stored)" or "typical hour (ESTIMATED)"
+  traffic_factor?: number; // multiplier on free-flow time behind traffic_source
   segment?: number; // multi-stop: which leg of the trip (A to B is 0, B to C is 1, ...) this leg belongs to
 };
 
@@ -82,7 +83,13 @@ export type Candidate = {
   arrive_iso?: string;
   timezone?: string;
   violates?: string[];
-  reliability?: { reliability_pct: number; history_days: number; basis: string };
+  reliability?: {
+    reliability_pct: number;
+    history_days: number;
+    basis: string;
+    confidence?: string; // ramped by history_days, capped at 14 days
+    delay_factors?: { text: string; source: string; timestamp: number; default: boolean }[]; // "what could delay you"
+  };
   pareto_optimal?: boolean;
   schedule?: StopVisit[]; // multi-stop trips only
 };

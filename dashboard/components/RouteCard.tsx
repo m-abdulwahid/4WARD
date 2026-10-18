@@ -1,15 +1,13 @@
 "use client";
-import { useEffect, useState } from "react";
 import type { BotKey, BotState } from "@/lib/bots";
 import { STATUS_CHIP } from "@/lib/bots";
 import type { Candidate } from "@/lib/api";
-import { API } from "@/lib/api";
 import { legColor, legMode, MODES } from "@/lib/modes";
 import { clock } from "@/lib/routeFit";
 import ModeBadge from "@/components/ModeBadge";
 import LegTimeline from "@/components/LegTimeline";
 import { timingLine } from "@/lib/timing";
-import { HistoryBars, ago, fmtTs } from "@/components/charts";
+import { fmtTs } from "@/components/charts";
 
 type Bot = { key: BotKey; name: string; color: string; blurb: string };
 
@@ -95,22 +93,13 @@ function WhyThisRoute({ bot, state }: { bot: BotKey; state: BotState }) {
   );
 }
 
-type LiveLite = { footer: { last_update_ts: number | null }; history: { bucket: number; avg_delay_s: number | null }[]; latest: { routes: { route_id: string; avg_delay_s: number | null; alerts: number; ts: number }[] } };
-
-/** Reliable-only evidence: the numbers behind the on-time estimate, plus system-wide context from the live
- * TTC feed. The engine does not (yet) tag which GTFS route_id a leg's label corresponds to, so this is shown
- * as system-wide context rather than claimed to be this exact leg's live delay. */
-function Evidence({ route, state, computedAt }: { route: Candidate; state: BotState; computedAt?: number }) {
-  const [live, setLive] = useState<LiveLite | null>(null);
-  useEffect(() => {
-    fetch(`${API}/live`).then((r) => r.json()).then(setLive).catch(() => {});
-  }, []);
+/** Reliable-only evidence: the numbers behind the on-time estimate. "What could delay you" is read
+ * straight off backend/reliability.py's delay_factors -- each item already carries its own real
+ * source and timestamp (TomTom's live ratio, an observed TTC delay, an active service alert, or an
+ * explicit default when no live signal exists for that leg), so nothing here is re-derived. */
+function Evidence({ route }: { route: Candidate }) {
   const rel = route.reliability;
-  const topDelayed = (live?.latest.routes ?? [])
-    .filter((r) => r.avg_delay_s != null)
-    .sort((a, b) => (b.avg_delay_s ?? 0) - (a.avg_delay_s ?? 0))
-    .slice(0, 3);
-  const estimatedLegs = route.legs.filter((l) => /estimat/i.test(l.provenance ?? ""));
+  const factors = rel?.delay_factors ?? [];
 
   return (
     <details className="group mt-2 rounded-lg ring-1 ring-violet-200 bg-violet-50/40" data-testid="reliable-evidence">
@@ -121,45 +110,25 @@ function Evidence({ route, state, computedAt }: { route: Candidate; state: BotSt
       <div className="flex flex-col gap-3 px-2.5 pb-2.5 text-xs">
         {rel ? (
           <p className="text-zinc-700">
-            Made it on time on <b className="tabular-nums">{rel.reliability_pct}%</b> of the last <b>{rel.history_days}</b> matching day(s)
-            {rel.history_days < 14 && <span className="text-amber-800"> (confidence still building, caps at 14 days)</span>}. Basis: {rel.basis}, from TTC delay history.
+            Made it on time on <b className="tabular-nums">{rel.reliability_pct}%</b> of the last <b>{rel.history_days}</b> matching day(s). Confidence:{" "}
+            <b>{rel.confidence ?? "—"}</b>. Basis: {rel.basis}.
           </p>
         ) : (
-          <p className="text-zinc-500">Not enough TTC delay history yet for this route and time.</p>
+          <p className="text-zinc-500">Not enough history yet for this route and time.</p>
         )}
-
-        <div>
-          <p className="mb-1 font-semibold text-zinc-700">System-wide TTC delay right now vs. typical for this hour</p>
-          {live ? (
-            <>
-              <HistoryBars rows={live.history} label="typical avg delay / hour, all tracked routes" />
-              <p className="mt-1 text-[10px] leading-snug text-zinc-500">
-                Not specific to this route&rsquo;s exact leg (Tiger Data does not map GTFS legs to a live route id yet). Source: Tiger Data live polls, as of {ago(live.footer.last_update_ts)}.
-              </p>
-            </>
-          ) : (
-            <p className="text-zinc-500">LIVE data loading…</p>
-          )}
-        </div>
 
         <div>
           <p className="mb-1 font-semibold text-zinc-700">What could delay you</p>
           <ul className="flex flex-col gap-1">
-            {topDelayed.map((r) => (
-              <li key={r.route_id} className="flex items-baseline justify-between gap-2 text-zinc-600">
-                <span>Route {r.route_id} is running {Math.round(r.avg_delay_s ?? 0)}s behind average right now{r.alerts ? `, ${r.alerts} alert(s)` : ""}.</span>
-                <span className="shrink-0 rounded bg-sky-50 px-1 text-[10px] font-semibold text-sky-800">LIVE · Tiger Data · {ago(r.ts)}</span>
-              </li>
-            ))}
-            {estimatedLegs.map((l, i) => (
+            {factors.map((f, i) => (
               <li key={i} className="flex items-baseline justify-between gap-2 text-zinc-600">
-                <span>{l.label} has no real-time schedule yet, so its timing is a typical-headway estimate.</span>
-                <span className="shrink-0 rounded bg-amber-50 px-1 text-[10px] font-semibold text-amber-900">
-                  ESTIMATED · 4WARD routing engine{computedAt ? ` · ${fmtTs(Math.round(computedAt / 1000))}` : ""}
+                <span>{f.text}</span>
+                <span className={`shrink-0 rounded px-1 text-[10px] font-semibold ${f.default ? "bg-amber-50 text-amber-900" : "bg-sky-50 text-sky-800"}`}>
+                  {f.default ? "ESTIMATED" : "LIVE"} · {f.source} · {fmtTs(Math.round(f.timestamp))}
                 </span>
               </li>
             ))}
-            {!topDelayed.length && !estimatedLegs.length && <li className="text-zinc-500">No known risk factors at plan time.</li>}
+            {!factors.length && <li className="text-zinc-500">No known risk factors at plan time.</li>}
           </ul>
         </div>
       </div>
@@ -224,23 +193,15 @@ export default function RouteCard({
             </div>
           </div>
           <span className="ml-auto flex shrink-0 items-center gap-1">
-            {/* small on-time chip, every card */}
+            {/* small on-time chip, every card. No "Pareto-optimal"/"Best overall"-style badge anywhere:
+                the user picks, nothing here tells them which card is "the" recommendation. */}
             {r?.reliability && (
               <span
                 data-testid={`reliability-${bot.key}`}
-                title={`${r.reliability.history_days} matching day(s) of TTC delay history (${r.reliability.basis})`}
+                title={`${r.reliability.history_days} matching day(s) of TTC delay history (${r.reliability.basis}). Confidence: ${r.reliability.confidence ?? "—"}.`}
                 className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-800 ring-1 ring-emerald-200"
               >
                 {r.reliability.reliability_pct}% on time
-              </span>
-            )}
-            {r?.pareto_optimal && (
-              <span
-                data-testid={`pareto-${bot.key}`}
-                title="No other computed route beats this one on time, cost, CO2, transfers and walking all at once."
-                className="rounded-full bg-zinc-900 px-2 py-0.5 text-[11px] font-semibold text-white"
-              >
-                Pareto-optimal
               </span>
             )}
             <StatusChip botKey={bot.key} state={state} />
@@ -311,7 +272,7 @@ export default function RouteCard({
           <WhyThisRoute bot={bot.key} state={state} />
 
           {/* Reliable only: extra "Evidence" expander */}
-          {isReliable && <Evidence route={r} state={state} computedAt={state.computedAt} />}
+          {isReliable && <Evidence route={r} />}
 
           {focused && (
             <div className="mt-2 border-t border-zinc-100 pt-2">

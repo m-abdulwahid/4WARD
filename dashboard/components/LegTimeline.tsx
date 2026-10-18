@@ -26,7 +26,12 @@ function LegRow({ leg, route, last }: { leg: Leg; route: Candidate; last: boolea
         {(leg.wait_s ?? 0) >= 60 && <span className="text-zinc-500" data-testid="leg-wait"> · waits {Math.round((leg.wait_s ?? 0) / 60)} min{leg.scheduled ? " for the next departure" : ""}</span>}
         {leg.arrive_at && <span className="text-zinc-500"> · arrives {leg.arrive_at}</span>}
         {leg.scheduled && <span className="ml-1 rounded bg-emerald-50 px-1 text-[10px] text-emerald-800">scheduled</span>}
-        {/estimat/i.test(leg.provenance ?? "") && <span className="ml-1 rounded bg-amber-50 px-1 text-[10px] text-amber-900">ESTIMATED</span>}
+        {leg.traffic_source === "TomTom live (not stored)" && (
+          <span className="ml-1 rounded bg-sky-50 px-1 text-[10px] text-sky-800" title={`Roads are ${leg.traffic_factor ?? 1}x free-flow time right now. Never stored.`}>
+            TomTom live (not stored)
+          </span>
+        )}
+        {/estimat/i.test(leg.provenance ?? leg.traffic_source ?? "") && <span className="ml-1 rounded bg-amber-50 px-1 text-[10px] text-amber-900">ESTIMATED</span>}
       </span>
     </li>
   );
