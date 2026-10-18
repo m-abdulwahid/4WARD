@@ -51,6 +51,11 @@ def traffic_multiplier(hour: int) -> float:
         return 1.1
     return 1.0
 
+# On-time scoring for road/bus_est legs (backend/reliability.py), which have no stored delay history
+# (TomTom is never stored). A documented default: road travel time is modelled as roughly Normal with
+# this coefficient of variation, e.g. a 20 min leg has a ~4 min standard deviation. ESTIMATE, not measured.
+ONTIME_CV = 0.20
+
 # Door-to-door time includes the minutes a car trip spends finding a spot and walking from it. ESTIMATES
 # (no public live parking data); downtown is slower than elsewhere. Used by planner.py for drive and park & ride.
 PARKING_SEARCH_MIN = {"downtown": 8.0, "other": 3.0}
