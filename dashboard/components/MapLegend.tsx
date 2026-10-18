@@ -105,7 +105,7 @@ export default function MapLegend({
               Show all routes
             </button>
           )}
-          <p className="mt-1 text-[10px] leading-snug text-zinc-500">Labels on the map name the bot behind each route. Routes on the same street sit side by side.</p>
+          <p className="mt-1 text-[10px] leading-snug text-zinc-500">Labels on the map name the bot behind each route. With all routes shown, each line has an edge in its bot&rsquo;s colour, and routes on the same street sit side by side. Click a line to select it.</p>
         </div>
         <div className="border-t border-zinc-100 pt-2">
           <h3 className="mb-1 text-[10px] font-semibold tracking-wide text-zinc-500 uppercase">{used ? "Modes on these routes" : "Modes"}</h3>

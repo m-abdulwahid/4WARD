@@ -29,12 +29,16 @@ export default function RouteChips({
   onToggle,
   onSolo,
   onShowAll,
+  onHover,
+  sameAs = {},
 }: {
   found: Record<BotKey, boolean>;
   hidden: Partial<Record<BotKey, boolean>>;
   onToggle: (k: BotKey) => void;
   onSolo: (k: BotKey) => void;
   onShowAll: () => void;
+  onHover: (k: BotKey | null) => void; // pointer over or keyboard focus on a chip highlights its route
+  sameAs?: Partial<Record<BotKey, string>>; // "same route as Economic"
 }) {
   const withRoute = BOTS.filter((b) => found[b.key]);
   const shownKeys = withRoute.filter((b) => !hidden[b.key]).map((b) => b.key);
@@ -47,7 +51,14 @@ export default function RouteChips({
         const has = found[b.key];
         const shown = has && !hidden[b.key];
         return (
-          <div key={b.key} className={`flex shrink-0 items-center rounded-full ring-1 ${shown ? "bg-white ring-zinc-200" : "bg-zinc-100 ring-zinc-200"}`}>
+          <div
+            key={b.key}
+            onMouseEnter={() => shown && onHover(b.key)}
+            onMouseLeave={() => onHover(null)}
+            onFocus={() => shown && onHover(b.key)}
+            onBlur={() => onHover(null)}
+            className={`flex shrink-0 items-center rounded-full ring-1 ${shown ? "bg-white ring-zinc-200" : "bg-zinc-100 ring-zinc-200"}`}
+          >
             <button
               type="button"
               data-testid={`route-chip-${b.key}`}
@@ -60,7 +71,14 @@ export default function RouteChips({
               className={`flex items-center gap-1.5 rounded-full py-1 pr-2 pl-2 text-xs font-medium focus-visible:outline-2 focus-visible:outline-zinc-900 disabled:cursor-default ${shown ? "text-zinc-900" : "text-zinc-400"}`}
             >
               <span aria-hidden className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: b.color, opacity: shown ? 1 : 0.35 }} />
-              <span className={shown ? "" : "line-through decoration-zinc-400"}>{b.name}</span>
+              <span className="flex flex-col items-start leading-tight">
+                <span className={shown ? "" : "line-through decoration-zinc-400"}>{b.name}</span>
+                {sameAs[b.key] && (
+                  <span data-testid={`route-same-${b.key}`} className="text-[10px] font-normal text-zinc-500">
+                    same route as {sameAs[b.key]}
+                  </span>
+                )}
+              </span>
               <Eye open={!!shown} />
             </button>
             {has && withRoute.length > 1 && (
