@@ -18,9 +18,9 @@ export const EXAMPLE_TRIPS = [
     prompt: "From Kensington Market to the Distillery District. I have an e-bike and want the greenest way there.",
   },
   {
-    title: "Drive or take transit?",
-    situation: "Has a car: is driving and parking worth it?",
-    prompt: "I have my car. Get me from York University to Union Station by 5pm. Is it better to drive and park, or take transit?",
+    title: "Morning commute by car?",
+    situation: "Arrive by 8:30 AM with a car, 2 suitcases, no Presto",
+    prompt: "I have my car. Get me from Scarborough Town Centre to King & Spadina by 8:30am. I have 2 suitcases and no Presto card.",
   },
 ];
 
