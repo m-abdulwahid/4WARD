@@ -56,12 +56,10 @@ export default function ExampleTrips({
                 type="button"
                 data-testid={`example-${i + 1}`}
                 aria-pressed={on}
-                title={x.prompt}
                 onClick={() => onPick(x)}
-                className={`flex h-full min-h-[4.5rem] w-full flex-col items-start gap-0.5 rounded-xl px-3 py-2.5 text-left ring-1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-900 ${on ? "bg-zinc-900 text-white ring-zinc-900" : "bg-white text-zinc-900 ring-zinc-200 hover:bg-zinc-50"}`}
+                className={`flex h-full w-full items-center rounded-xl px-3 py-2.5 text-left ring-1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-900 ${on ? "bg-zinc-900 text-white ring-zinc-900" : "bg-white text-zinc-900 ring-zinc-200 hover:bg-zinc-50"}`}
               >
                 <span className="line-clamp-2 text-sm font-semibold leading-snug">{x.title}</span>
-                <span className={`line-clamp-2 text-xs leading-snug ${on ? "text-zinc-300" : "text-zinc-600"}`}>{x.situation}</span>
               </button>
             </li>
           );

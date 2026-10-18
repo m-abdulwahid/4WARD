@@ -664,13 +664,9 @@ export default function Home() {
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
                 placeholder="Where are you going? e.g. Union Station to Pearson by 6pm, 2 suitcases, no Presto card"
-                aria-describedby="prompt-hint"
                 rows={7}
                 className="w-full min-h-[7.5rem] shrink-0 resize-y rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-sm leading-relaxed focus:border-zinc-400 focus:bg-white focus:outline-none"
               />
-              <p id="prompt-hint" data-testid="prompt-hint" className="-mt-1 text-xs leading-relaxed text-zinc-600">
-                <span className="font-semibold text-zinc-800">Try your own.</span> Short is fine (&ldquo;York U to CN Tower&rdquo;). Places must be in the GTA (Toronto, Durham, York, Peel or Halton). 4WARD understands a deadline (&ldquo;by 6pm&rdquo;), bags, a budget (&ldquo;budget $10&rdquo;), no Presto card, a car or electric car, your bike or e-bike, and stairs or a stroller (step-free access is not checked yet).
-              </p>
               <ExampleTrips
                 current={prompt}
                 onPick={(trip) => {
