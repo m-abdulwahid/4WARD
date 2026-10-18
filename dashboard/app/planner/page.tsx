@@ -336,16 +336,6 @@ export default function Planner() {
                       <dd>{x.transfers}</dd>
                     </div>
                   </dl>
-                  <p className="mt-1 text-xs text-zinc-600">
-                    {x.depart} → {x.arrive} · walk {x.walk_m} m
-                    {x.meets_deadline !== undefined &&
-                      (x.meets_deadline ? " · makes your deadline" : ` · MISSES deadline (leave by ${x.leave_by})`)}
-                  </p>
-                  {x.notes?.map((n) => (
-                    <p key={n} className="text-xs text-zinc-500">
-                      • {n}
-                    </p>
-                  ))}
                 </>
               ) : (
                 <p className="text-xs text-zinc-600">Unavailable: {x.reason}</p>

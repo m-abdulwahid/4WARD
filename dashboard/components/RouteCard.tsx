@@ -9,13 +9,17 @@ import LegTimeline from "@/components/LegTimeline";
 
 type Bot = { key: BotKey; name: string; color: string; blurb: string };
 
-function Metric({ label, value, tag }: { label: string; value: string; tag?: string }) {
+function Metric({ label, value, tag, tagTitle }: { label: string; value: string; tag?: string; tagTitle?: string }) {
   return (
     <div className="min-w-0">
       <dt className="text-[11px] text-zinc-500">{label}</dt>
       <dd className="flex flex-wrap items-baseline gap-x-1 text-sm font-semibold tabular-nums text-zinc-900">
         {value}
-        {tag && <span className="rounded bg-zinc-100 px-1 text-[10px] font-medium text-zinc-600">{tag}</span>}
+        {tag && (
+          <span title={tagTitle} className="rounded bg-zinc-100 px-1 text-[10px] font-medium text-zinc-600">
+            {tag}
+          </span>
+        )}
       </dd>
     </div>
   );
@@ -35,6 +39,11 @@ const routeType = (r: Candidate) => r.title.replace(/\s*\(.*?\)\s*/g, "").trim()
 /** The price includes an engine estimate (rideshare fare, GO fare, parking, lot fee): the engine says so in its notes.
  * Notes about estimated timing (e.g. "Bus leg is an ESTIMATE") do not count. */
 const estimatedFare = (r: Candidate) => (r.notes ?? []).some((n) => /\b(fare|parking|fee|price|cost)\b/i.test(n) && /\bestimat/i.test(n));
+
+/** The travel time includes an estimate (typical-day traffic, a leg without stop-level schedules): the engine's notes,
+ * shown only as the tag's tooltip. */
+const timeEstimates = (r: Candidate) =>
+  (r.notes ?? []).filter((n) => /traffic\s+factor|typical-day|\bleg is an estimat/i.test(n));
 
 /** A compact block: title row, stats row, button. The leg timeline opens when the card is selected. */
 export default function RouteCard({
@@ -120,8 +129,18 @@ export default function RouteCard({
         {/* stats row */}
         {r ? (
           <dl className="mt-2.5 grid grid-cols-4 gap-2">
-            <Metric label="Time" value={`${Math.round(r.duration_min ?? 0)} min`} />
-            <Metric label="Cost" value={`$${(r.cost ?? 0).toFixed(2)}`} tag={estimatedFare(r) ? "Estimated" : undefined} />
+            <Metric
+              label="Time"
+              value={`${Math.round(r.duration_min ?? 0)} min`}
+              tag={timeEstimates(r).length ? "Estimated" : undefined}
+              tagTitle={timeEstimates(r).join(". ") || undefined}
+            />
+            <Metric
+              label="Cost"
+              value={`$${(r.cost ?? 0).toFixed(2)}`}
+              tag={estimatedFare(r) ? "Estimated" : undefined}
+              tagTitle={(r.notes ?? []).filter((n) => /\b(fare|parking|fee|price|cost)\b/i.test(n) && /\bestimat/i.test(n)).join(". ") || undefined}
+            />
             <Metric label="CO₂" value={`${(r.co2_kg ?? 0).toFixed(2)} kg`} />
             <Metric label="Transfers" value={String(r.transfers ?? 0)} />
           </dl>

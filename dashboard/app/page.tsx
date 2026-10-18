@@ -883,7 +883,7 @@ export default function Home() {
             ))}
             <p
               className="text-[11px] text-zinc-500"
-              title="Numbers come from the routing engine, not the AI. Transit fares follow TTC and GO rules; driving, parking, rideshare costs and traffic are estimated."
+              title="From the routing engine, not the AI. Transit fares follow TTC and GO rules; driving, parking, rideshare costs and traffic are estimated."
             >
               Estimates
             </p>
