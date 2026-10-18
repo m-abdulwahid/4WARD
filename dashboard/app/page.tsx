@@ -58,13 +58,35 @@ function readBudget(text: string): number | null {
   return m ? Number(m[1]) : null;
 }
 
-const LEFT_W = 400;
-const RIGHT_W = 240;
-const LEFT_TABS = [
-  { key: "plan", label: "Plan a trip" },
-  { key: "routes", label: "Routes" },
-  { key: "insights", label: "Insights" },
+const CARD_W = 340;
+// "map" closes the floating panel; the other three open it to that content.
+const NAV = [
+  { key: "map", label: "Map", icon: (p: { className?: string }) => (
+    <svg aria-hidden viewBox="0 0 24 24" className={p.className} fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2-6-2Z" />
+      <path d="M9 4v14M15 6v14" />
+    </svg>
+  ) },
+  { key: "plan", label: "Plan", icon: (p: { className?: string }) => (
+    <svg aria-hidden viewBox="0 0 24 24" className={p.className} fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="11" cy="11" r="7" />
+      <path d="m20 20-3.5-3.5" />
+    </svg>
+  ) },
+  { key: "routes", label: "Routes", icon: (p: { className?: string }) => (
+    <svg aria-hidden viewBox="0 0 24 24" className={p.className} fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="6" cy="6" r="2.3" />
+      <circle cx="18" cy="18" r="2.3" />
+      <path d="M8 7c3 0 2 9 5 9h5" />
+    </svg>
+  ) },
+  { key: "insights", label: "Insights", icon: (p: { className?: string }) => (
+    <svg aria-hidden viewBox="0 0 24 24" className={p.className} fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 20V10M11 20V4M18 20v-7" />
+    </svg>
+  ) },
 ] as const;
+type LeftTab = Exclude<(typeof NAV)[number]["key"], "map">;
 
 export default function Home() {
   const [prompt, setPrompt] = useState("");
@@ -94,9 +116,8 @@ export default function Home() {
   const [sortBy, setSortBy] = useState<SortKey>("default"); // neutral card order only; nothing is ever highlighted by it
   const [drawer, setDrawer] = useState(false);
   const [timelapseOpen, setTimelapseOpen] = useState(false);
-  const [leftTab, setLeftTab] = useState<(typeof LEFT_TABS)[number]["key"]>("plan");
-  const [leftOpen, setLeftOpen] = useState(true); // collapses the left panel to map-only on wide screens
-  const [rightOpen, setRightOpen] = useState(true); // collapses the legend panel, for the same reason
+  const [leftTab, setLeftTab] = useState<LeftTab>("plan");
+  const [leftOpen, setLeftOpen] = useState(true); // the floating panel; "Map" in the nav strip hides it
   const [hiddenBots, setHiddenBots] = useState<Partial<Record<BotKey, boolean>>>({});
   const [showAll, setShowAll] = useState(false); // "Show all routes": ignore the chosen route's highlight
   const promptRef = useRef<HTMLTextAreaElement>(null);
@@ -350,69 +371,10 @@ export default function Home() {
     }),
   ) as Record<BotKey, LegendBotStatus>;
 
-  return (
-    <div className="fixed inset-0 flex flex-col overflow-hidden bg-zinc-100 text-zinc-900">
-      {/* Header: wordmark, data status, Watch the bots */}
-      <header className="z-30 flex min-h-14 shrink-0 flex-wrap items-center gap-2 border-b border-zinc-200 bg-white px-4 py-2 lg:h-14 lg:flex-nowrap lg:gap-3 lg:py-0">
-        <p className="text-base font-extrabold tracking-tight">
-          4W<span className="text-emerald-600">.</span>
-        </p>
-        <ul aria-label="Data status" data-testid="data-status" className="flex flex-wrap gap-1.5 text-[11px] font-medium">
-          {health === undefined ? null : health === null ? (
-            <li className={`rounded-full px-2 py-0.5 ${TONE.warn}`}>Backend offline</li>
-          ) : (
-            <>
-              <li data-testid="status-data" className={`rounded-full px-2 py-0.5 ${health.replay ? "bg-amber-50 text-amber-900" : TONE.neutral}`}>
-                {health.replay ? "Replay data" : "Live data"}
-              </li>
-              <li data-testid="status-db" title={dbLabel(dbStatus).long} className={`rounded-full px-2 py-0.5 ${TONE[dbLabel(dbStatus).tone]}`}>
-                {dbLabel(dbStatus).chip}
-              </li>
-              <li className={`rounded-full px-2 py-0.5 ${health.gemini_configured ? TONE.good : TONE.neutral}`}>
-                {health.gemini_configured ? "Gemini bots" : "Rule-based bots"}
-              </li>
-            </>
-          )}
-        </ul>
-        <div className="ml-auto flex items-center gap-2">
-          <button
-            type="button"
-            data-testid="watch-bots"
-            aria-expanded={drawer}
-            onClick={() => setDrawer((v) => !v)}
-            className="rounded-full bg-zinc-900 px-4 py-1.5 text-xs font-semibold text-white hover:bg-zinc-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-900"
-          >
-            {drawer ? "Hide the bots" : "Watch the bots"}
-            {running && !drawer && <span aria-hidden className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full bg-sky-400 align-middle" />}
-          </button>
-        </div>
-      </header>
+  const tabTitle = leftTab === "plan" ? "Plan a trip" : leftTab === "routes" ? "Routes" : "Insights";
 
-      {/* Body: left panel (Plan / Routes / Insights) | map | legend panel. Stacks vertically below lg. */}
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto lg:flex-row lg:overflow-hidden">
-        {/* LEFT: a page selector, collapsible to map-only on wide screens */}
-        <section
-          aria-label="Left panel"
-          data-testid="left-panel"
-          className={`flex shrink-0 flex-col gap-3 overflow-y-auto border-b border-zinc-200 bg-white lg:h-full lg:border-b-0 ${leftOpen ? "p-4 lg:w-[var(--left-w)] lg:border-r" : "hidden lg:w-0 lg:border-r-0 lg:p-0"}`}
-          style={{ "--left-w": `${LEFT_W}px` } as React.CSSProperties}
-        >
-          <div role="tablist" aria-label="Left panel pages" className="flex shrink-0 gap-1 rounded-full bg-zinc-100 p-1 text-xs font-semibold">
-            {LEFT_TABS.map((t) => (
-              <button
-                key={t.key}
-                type="button"
-                role="tab"
-                aria-selected={leftTab === t.key}
-                data-testid={`left-tab-${t.key}`}
-                onClick={() => setLeftTab(t.key)}
-                className={`flex-1 rounded-full px-2 py-1.5 transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-900 ${leftTab === t.key ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-500 hover:text-zinc-700"}`}
-              >
-                {t.label}
-              </button>
-            ))}
-          </div>
-
+  const tabContent = (
+    <>
           {leftTab === "insights" && <InsightsTab />}
 
           {leftTab === "routes" && (
@@ -731,60 +693,112 @@ export default function Home() {
           )}
           </>
           )}
-        </section>
+    </>
+  );
 
-        {/* Collapse handle: hides the left panel to map-only on wide screens */}
-        <button
-          type="button"
-          data-testid="toggle-left-panel"
-          aria-expanded={leftOpen}
-          aria-label={leftOpen ? "Hide the trip panel" : "Show the trip panel"}
-          onClick={() => setLeftOpen((v) => !v)}
-          className="hidden shrink-0 items-center justify-center bg-zinc-100 text-zinc-400 hover:bg-zinc-200 hover:text-zinc-700 focus-visible:outline-2 focus-visible:outline-zinc-900 lg:flex lg:h-full lg:w-3"
-        >
-          <svg aria-hidden viewBox="0 0 24 24" className={`h-3 w-3 transition-transform duration-150 ${leftOpen ? "" : "rotate-180"}`} fill="currentColor">
-            <path d="M15 6l-6 6 6 6" />
-          </svg>
-        </button>
+  return (
+    <div className="fixed inset-0 flex overflow-hidden bg-zinc-100 text-zinc-900">
+      {/* Icon sidebar: wordmark + the four nav buttons. Always visible, takes real layout space. */}
+      <nav aria-label="Navigate" data-testid="icon-nav" className="z-20 flex w-[72px] shrink-0 flex-col items-center gap-1 border-r border-zinc-200 bg-white py-3">
+        <p className="mb-2 text-base font-extrabold tracking-tight">
+          4W<span className="text-emerald-600">.</span>
+        </p>
+        {NAV.map((item) => {
+          const active = item.key === "map" ? !leftOpen : leftOpen && leftTab === item.key;
+          return (
+            <button
+              key={item.key}
+              type="button"
+              data-testid={item.key === "map" ? "nav-map" : `left-tab-${item.key}`}
+              aria-pressed={active}
+              onClick={() => {
+                if (item.key === "map") setLeftOpen(false);
+                else {
+                  setLeftTab(item.key as LeftTab);
+                  setLeftOpen(true);
+                }
+              }}
+              className="flex flex-col items-center gap-1 rounded-xl px-2 py-2 text-[10px] font-medium text-zinc-500 hover:text-zinc-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-900"
+            >
+              <span className={`flex h-9 w-9 items-center justify-center rounded-xl transition-colors duration-150 ${active ? "bg-zinc-900 text-white" : "bg-transparent"}`}>
+                <item.icon className="h-5 w-5" />
+              </span>
+              {item.label}
+            </button>
+          );
+        })}
+      </nav>
 
-        {/* MIDDLE: map, full width when both side panels are collapsed */}
-        <div className="relative h-[50vh] shrink-0 lg:h-full lg:flex-1">
-          <RouteMap
-            routes={mapRoutes}
-            origin={first ? first.legs[0]?.from : null}
-            destination={first ? first.legs[first.legs.length - 1]?.to : null}
-            waypoints={waypoints}
-            padding={mapPadding}
-            colorBy="mode"
-            lineScale={1}
-            onRouteClick={selectFromMap}
-            fitKey="map"
-            showTtc={showTtc}
-            bikeStations={bikeStations}
-          />
-        </div>
+      {/* Map + floating chrome. The map is full-bleed; everything else overlays it. */}
+      <div className="relative min-h-0 flex-1">
+        <RouteMap
+          routes={mapRoutes}
+          origin={first ? first.legs[0]?.from : null}
+          destination={first ? first.legs[first.legs.length - 1]?.to : null}
+          waypoints={waypoints}
+          padding={mapPadding}
+          colorBy="mode"
+          lineScale={1}
+          onRouteClick={selectFromMap}
+          fitKey="map"
+          showTtc={showTtc}
+          bikeStations={bikeStations}
+        />
 
-        {/* Collapse handle: hides the legend panel to map-only on wide screens */}
-        <button
-          type="button"
-          data-testid="toggle-right-panel"
-          aria-expanded={rightOpen}
-          aria-label={rightOpen ? "Hide the legend panel" : "Show the legend panel"}
-          onClick={() => setRightOpen((v) => !v)}
-          className="hidden shrink-0 items-center justify-center bg-zinc-100 text-zinc-400 hover:bg-zinc-200 hover:text-zinc-700 focus-visible:outline-2 focus-visible:outline-zinc-900 lg:flex lg:h-full lg:w-3"
-        >
-          <svg aria-hidden viewBox="0 0 24 24" className={`h-3 w-3 transition-transform duration-150 ${rightOpen ? "rotate-180" : ""}`} fill="currentColor">
-            <path d="M15 6l-6 6 6 6" />
-          </svg>
-        </button>
+        {leftOpen && (
+          <section
+            aria-label="Left panel"
+            data-testid="left-panel"
+            className="absolute top-4 bottom-4 left-4 z-20 flex w-[340px] max-w-[calc(100vw-6.5rem)] flex-col overflow-hidden rounded-2xl bg-white shadow-xl ring-1 ring-black/5"
+            style={{ "--card-w": `${CARD_W}px` } as React.CSSProperties}
+          >
+            <div className="flex shrink-0 items-start justify-between gap-2 border-b border-zinc-100 px-4 py-3">
+              <div className="min-w-0">
+                <h2 className="text-sm font-bold">{tabTitle}</h2>
+                <ul aria-label="Data status" data-testid="data-status" className="mt-1 flex flex-wrap gap-1.5 text-[11px] font-medium">
+                  {health === undefined ? null : health === null ? (
+                    <li className={`rounded-full px-2 py-0.5 ${TONE.warn}`}>Backend offline</li>
+                  ) : (
+                    <>
+                      <li data-testid="status-data" className={`rounded-full px-2 py-0.5 ${health.replay ? "bg-amber-50 text-amber-900" : TONE.neutral}`}>
+                        {health.replay ? "Replay data" : "Live data"}
+                      </li>
+                      <li data-testid="status-db" title={dbLabel(dbStatus).long} className={`rounded-full px-2 py-0.5 ${TONE[dbLabel(dbStatus).tone]}`}>
+                        {dbLabel(dbStatus).chip}
+                      </li>
+                      <li className={`rounded-full px-2 py-0.5 ${health.gemini_configured ? TONE.good : TONE.neutral}`}>
+                        {health.gemini_configured ? "Gemini bots" : "Rule-based bots"}
+                      </li>
+                    </>
+                  )}
+                </ul>
+              </div>
+              <button
+                type="button"
+                data-testid="toggle-left-panel"
+                aria-label="Hide the trip panel"
+                onClick={() => setLeftOpen(false)}
+                className="shrink-0 text-xs font-semibold text-zinc-500 hover:text-zinc-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-900"
+              >
+                ← Hide panel
+              </button>
+            </div>
+            <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4">{tabContent}</div>
+          </section>
+        )}
 
-        {/* RIGHT: legend and map layers, persistent instead of floating over the map */}
-        <section
-          aria-label="Map legend and layers"
-          data-testid="right-panel"
-          className={`flex shrink-0 flex-col gap-2 overflow-y-auto bg-zinc-50 lg:h-full ${rightOpen ? "p-3 lg:w-[var(--right-w)] lg:border-l lg:border-zinc-200" : "hidden lg:w-0 lg:border-l-0 lg:p-0"}`}
-          style={{ "--right-w": `${RIGHT_W}px` } as React.CSSProperties}
-        >
+        {/* Floating: Watch the bots, map layers, legend. Always reachable regardless of the left panel. */}
+        <div className="absolute top-4 right-4 z-20 flex flex-col items-end gap-2">
+          <button
+            type="button"
+            data-testid="watch-bots"
+            aria-expanded={drawer}
+            onClick={() => setDrawer((v) => !v)}
+            className="rounded-full bg-zinc-900 px-4 py-1.5 text-xs font-semibold text-white shadow-lg hover:bg-zinc-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-900"
+          >
+            {drawer ? "Hide the bots" : "Watch the bots"}
+            {running && !drawer && <span aria-hidden className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full bg-sky-400 align-middle" />}
+          </button>
           <LayerToggles onTtc={setShowTtc} onBikes={setBikeStations} />
           <MapLegend
             status={legendStatus}
@@ -794,7 +808,7 @@ export default function Home() {
             highlight={highlight}
             modes={usedModes}
           />
-        </section>
+        </div>
       </div>
 
       {drawer && <BotDrawer bots={bots} running={running} onClose={closeDrawer} />}
