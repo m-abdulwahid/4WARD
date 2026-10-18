@@ -78,6 +78,22 @@ Idea for later: a "Most reliable" goal (highest chance of making the deadline, f
 - Diversity rule: if two bots return the same itinerary, the orchestrator reruns the lower priority bot with "must differ from route X in at least one leg."
 - Critic pass: after all bots finish, check each route against the user's constraints using engine output only. Flag violations in the UI.
 
+## Ride-hail leg and fare scouts
+
+Some routes use a short ride-hail leg to a transit hub (for example a ride to Guildwood GO, then the train). The engine gets ride-hail estimates from a provider layer with three backends:
+
+- `sim` (default): our own simulator, "RideSim", at /ridesim in the dashboard. Fare = base + per km + per minute, times a surge multiplier set by pickup zone and time. Quotes expire after about 60 seconds. A "Trigger storm" button spikes surge for demos. Every page shows a SIMULATED banner. Do not use the Uber name, logo, or lookalike styling.
+- `steel-live` (optional, read only): Steel fare scouts read a public price estimator page for a few pickup and drop-off pairs. No login, no booking, results cached, rate limited. Only if the site's terms allow it, and never use captcha solving or proxies to get around blocks.
+- `cache`: last known estimates, used by replay mode.
+
+Fare scouts run in parallel, one Steel session per candidate hub, because quotes expire fast. Results go into a `fare_quotes` hypertable in Tiger Data (ts, provider, pickup, dropoff, price, surge, source, simulated flag) so the dashboard can chart surge over time.
+
+Rules for this part:
+- Price depends on pickup zone, time, and trip length. Do not claim "surge arbitrage." The honest claim is a short, cheap ride plus transit can beat one long ride.
+- Every ride-hail number shows its provider and a SIMULATED or LIVE label.
+- Never log in to a real ride-hail account, never store credentials, never book anything.
+- Test live mode manually in a logged-out browser first. If the estimator needs a login or blocks automation, skip live mode and use `sim`.
+
 ## Routing engine
 
 - OpenTripPlanner (or Valhalla) generates candidate itineraries from TTC and GO GTFS plus OpenStreetMap.
@@ -157,13 +173,23 @@ Stretch: bus pass handling, accessibility profiles, "shortcut" paths. Shortcuts 
   tests/          fare tests, routing tests, eval harness
 ```
 
-## Commands (fill in as they get created)
+## Commands
 
-- Backend: `uvicorn backend.main:app --reload`
+- Local all: `powershell -File start.ps1` (or `-Prod`)
+- Backend: `.venv\Scripts\python -m uvicorn backend.main:app --port 8000`
 - Dashboard: `cd dashboard && npm run dev`
 - Bots: `python -m bots.run --prompt "..."`
 - Tests: `pytest`
 - Eval: `python tests/eval.py`
+- Ingest loop: `python -m backend.ingest --loop 90`
+
+## Hosting (public URLs)
+
+- Dashboard: Vercel (project root = `dashboard/`). Set `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_BOT_TOKEN` in the Vercel project env.
+- Backend: Railway (repo root, `railway.toml` start command). Set `DATABASE_URL`, `GEMINI_API_KEY`, `GEMINI_MODEL`, `BOT_TOKEN`, `CORS_ORIGINS` (your Vercel origin), `STEEL_API_KEY`, `BROWSER_BACKEND`, `INGEST_EVERY_S`, `RATE_LIMIT_PER_MIN` in Railway. Never commit secrets.
+- Shared bot token: same random value in Railway `BOT_TOKEN` and Vercel `NEXT_PUBLIC_BOT_TOKEN`. Leave both empty for local (auth gate off).
+- CORS: production `CORS_ORIGINS=https://<your-vercel-app>.vercel.app`. Local defaults to `http://localhost:3000` when unset.
+- Confirm: open the Vercel site, Live panel should load; `GET <backend>/health` returns ok.
 
 ## Definition of done
 

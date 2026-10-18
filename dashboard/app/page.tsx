@@ -1,9 +1,10 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
-import { API, Candidate } from "@/lib/api";
+import { API, Candidate, apiHeaders, runWebSocketUrl } from "@/lib/api";
 import { BOTS, BotKey, BotState, blankBots } from "@/lib/bots";
 import InsightsPanel from "@/components/InsightsPanel";
+import LivePanel from "@/components/LivePanel";
 import RouteCard from "@/components/RouteCard";
 import BotDrawer from "@/components/BotDrawer";
 import RouteSummary from "@/components/RouteSummary";
@@ -232,10 +233,14 @@ export default function Home() {
     setTab("routes");
     t0.current = Date.now();
     try {
-      const r = await fetch(`${API}/run`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ prompt: text }) });
+      const r = await fetch(`${API}/run`, {
+        method: "POST",
+        headers: apiHeaders({ "content-type": "application/json" }),
+        body: JSON.stringify({ prompt: text }), // final text: typed time fields already applied
+      });
       if (!r.ok) throw new Error(`Backend refused the run (${r.status})`);
       const { id } = await r.json();
-      const ws = new WebSocket(`${API.replace(/^http/, "ws")}/ws/run/${id}`);
+      const ws = new WebSocket(runWebSocketUrl(id));
       wsRef.current = ws;
       ws.onmessage = (m) => {
         const ev = JSON.parse(m.data);
@@ -246,7 +251,16 @@ export default function Home() {
         }
         else if (ev.type === "frame") patch(k, { frame: ev.data });
         else if (ev.type === "status") patch(k, { status: ev.status });
-        else if (ev.type === "step") setBots((b) => ({ ...b, [k]: { ...b[k], steps: ev.n, lastReason: ev.reason ?? b[k].lastReason } }));
+        else if (ev.type === "step")
+          setBots((b) => ({
+            ...b,
+            [k]: {
+              ...b[k],
+              steps: ev.n,
+              lastReason: ev.reason ?? b[k].lastReason,
+              log: [...b[k].log, { n: ev.n, action: ev.action, testid: ev.testid, text: ev.text, reason: ev.reason, outcome: ev.outcome }],
+            },
+          }));
         else if (ev.type === "result") {
           patch(k, { status: ev.status, route: ev.route, brain: ev.brain, elapsed: ev.elapsed_s, error: ev.error });
           if (panelHiddenRef.current || tabRef.current === "map") setUnseen((u) => u + 1);
@@ -812,7 +826,12 @@ export default function Home() {
 
         {/* INSIGHTS tab */}
         <div id="panel-insights" role="tabpanel" aria-labelledby="tab-insights" hidden={tab !== "insights"} className="min-h-0 flex-1 overflow-y-auto px-4 pb-4 md:px-5">
-          {insightsSeen && <InsightsPanel />}
+          {insightsSeen && (
+            <>
+              <LivePanel />
+              <InsightsPanel />
+            </>
+          )}
         </div>
         </div>
       </section>

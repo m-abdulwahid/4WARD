@@ -95,37 +95,158 @@ function ZoomView({ zoom, bots, onClose }: { zoom: NonNullable<Zoom>; bots: Reco
   );
 }
 
+const OUTCOME_CLS = (outcome?: string) =>
+  !outcome ? "text-zinc-400" : outcome === "ok" ? "text-emerald-700" : outcome.startsWith("error") ? "text-red-700" : "text-zinc-500";
+
 export default function BotDrawer({ bots, running, onClose }: { bots: Record<BotKey, BotState>; running: boolean; onClose: () => void }) {
   const closeRef = useRef<HTMLButtonElement>(null);
+  // one bot's full step log (from master), and the enlarged live screen (hover or tap)
+  const [expanded, setExpanded] = useState<BotKey | null>(null);
+  const expandedRef = useRef<BotKey | null>(null);
+  expandedRef.current = expanded;
+  const logEndRef = useRef<HTMLDivElement>(null);
   const [zoom, setZoom] = useState<Zoom>(null);
   const zoomRef = useRef<Zoom>(null);
   zoomRef.current = zoom;
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastPointer = useRef<string>("mouse");
   const tileRefs = useRef<Partial<Record<BotKey, HTMLButtonElement | null>>>({});
 
   useEffect(() => {
     closeRef.current?.focus();
-    // Esc closes the enlarged screen first, then the drawer
+    // Esc closes the enlarged screen first, then the step log, then the drawer
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       if (zoomRef.current) {
         const k = zoomRef.current.key;
         setZoom(null);
         tileRefs.current[k]?.focus();
-      } else onClose();
+      } else if (expandedRef.current) setExpanded(null);
+      else onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
-  useEffect(() => () => {
-    if (hoverTimer.current) clearTimeout(hoverTimer.current);
-  }, []);
+  useEffect(
+    () => () => {
+      if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    },
+    [],
+  );
+  useEffect(() => {
+    if (expanded) logEndRef.current?.scrollIntoView({ block: "end" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expanded, bots[expanded ?? "cheap"]?.log.length]);
 
   const clearTimer = () => {
     if (hoverTimer.current) clearTimeout(hoverTimer.current);
     hoverTimer.current = null;
   };
+
+  /**
+   * A bot's live screen: hover to preview it enlarged (grid only), tap/click/Enter to pin the enlarged view.
+   * The step-log view shows the screen large already and right where the pointer lands, so there it opens on click only.
+   */
+  const screen = (k: BotKey, name: string, s: BotState, hover = true) => (
+    <button
+      ref={(el) => {
+        tileRefs.current[k] = el;
+      }}
+      type="button"
+      data-testid={`bot-${k}-screen`}
+      disabled={!s.frame}
+      aria-label={`Enlarge the ${name} bot's screen`}
+      aria-haspopup="dialog"
+      onPointerEnter={(e) => {
+        if (!hover || e.pointerType !== "mouse" || !s.frame || zoomRef.current?.pinned) return;
+        clearTimer();
+        // short delay: passing over a screen on the way somewhere else does not open it
+        hoverTimer.current = setTimeout(() => setZoom({ key: k, pinned: false }), zoomRef.current ? 0 : 140);
+      }}
+      onPointerLeave={(e) => {
+        if (e.pointerType !== "mouse") return;
+        clearTimer();
+        setZoom((z) => (z && !z.pinned && z.key === k ? null : z));
+      }}
+      onClick={() => {
+        clearTimer();
+        setZoom({ key: k, pinned: true }); // tap, click or keyboard: stays open until X, tap outside or Esc
+      }}
+      className="relative block aspect-[1000/640] w-full shrink-0 cursor-zoom-in bg-zinc-100 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-zinc-900 disabled:cursor-default"
+    >
+      {s.frame ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={`data:image/jpeg;base64,${s.frame}`} alt={`${name} bot's browser view`} className="h-full w-full object-cover" />
+      ) : (
+        <span className="flex h-full items-center justify-center text-xs text-zinc-500">{running ? "Starting browser…" : "Waiting for a trip"}</span>
+      )}
+    </button>
+  );
+
+  const zoomView = zoom && (
+    <ZoomView
+      key={`${zoom.key}-${zoom.pinned}`}
+      zoom={zoom}
+      bots={bots}
+      onClose={() => {
+        const k = zoom.key;
+        setZoom(null);
+        tileRefs.current[k]?.focus();
+      }}
+    />
+  );
+
+  if (expanded) {
+    const b = BOTS.find((x) => x.key === expanded)!;
+    const s = bots[expanded];
+    return (
+      <div
+        role="dialog"
+        aria-modal="false"
+        aria-label={`${b.name} bot, full step log`}
+        data-testid="bots-drawer"
+        className="absolute inset-x-0 top-12 bottom-0 z-30 flex flex-col rounded-t-3xl bg-white shadow-2xl ring-1 ring-black/5 md:inset-x-auto md:top-4 md:right-4 md:bottom-4 md:w-[min(640px,calc(100vw-560px))] md:min-w-[420px] md:rounded-2xl"
+      >
+        <div className="flex items-center justify-between gap-2 border-b border-zinc-100 px-4 py-3">
+          <button
+            type="button"
+            data-testid="unfocus-bot"
+            onClick={() => setExpanded(null)}
+            className="flex items-center gap-1.5 rounded-full px-2 py-1 text-xs font-medium text-zinc-600 hover:bg-zinc-100 focus-visible:outline-2 focus-visible:outline-zinc-900"
+          >
+            <span aria-hidden>←</span> All bots
+          </button>
+          <h2 className="flex items-center gap-2 text-sm font-semibold">
+            <span aria-hidden className="h-2.5 w-2.5 rounded-full" style={{ background: b.color }} />
+            {b.name}
+          </h2>
+          <StatusChip botKey={b.key} state={s} />
+        </div>
+        {screen(b.key, b.name, s, false)}
+        <ol data-testid="bot-step-log" className="flex-1 overflow-y-auto px-4 py-3 text-xs">
+          {s.log.length === 0 && <li className="text-zinc-400">No steps yet.</li>}
+          {s.log.map((e) => (
+            <li key={e.n} className="border-b border-zinc-100 py-2 last:border-0">
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="font-semibold text-zinc-800">
+                  Step {e.n}: {e.reason || e.action}
+                </span>
+                <span className={`shrink-0 text-[10px] ${OUTCOME_CLS(e.outcome)}`}>{e.outcome}</span>
+              </div>
+              {(e.action || e.testid || e.text) && (
+                <p className="mt-0.5 font-mono text-[10px] text-zinc-500">
+                  {e.action}
+                  {e.testid ? ` → ${e.testid}` : ""}
+                  {e.text ? ` "${e.text}"` : ""}
+                </p>
+              )}
+            </li>
+          ))}
+          <div ref={logEndRef} />
+        </ol>
+        {zoomView}
+      </div>
+    );
+  }
 
   return (
     <div
@@ -138,7 +259,7 @@ export default function BotDrawer({ bots, running, onClose }: { bots: Record<Bot
       <div className="flex items-center justify-between border-b border-zinc-100 px-4 py-3">
         <div>
           <h2 className="text-sm font-semibold">Watch the bots</h2>
-          <p className="text-xs text-zinc-500">Each bot drives its own browser through the planner. Hover or tap a screen to enlarge it.</p>
+          <p className="text-xs text-zinc-500">Hover or tap a screen to enlarge it. Open a bot&rsquo;s steps to follow them one by one.</p>
         </div>
         <button
           ref={closeRef}
@@ -162,65 +283,25 @@ export default function BotDrawer({ bots, running, onClose }: { bots: Record<Bot
                 </h3>
                 <StatusChip botKey={b.key} state={s} />
               </div>
+              {screen(b.key, b.name, s)}
               <button
-                ref={(el) => {
-                  tileRefs.current[b.key] = el;
-                }}
                 type="button"
-                data-testid={`bot-${b.key}-screen`}
-                disabled={!s.frame}
-                aria-label={`Enlarge the ${b.name} bot's screen`}
-                aria-haspopup="dialog"
-                onPointerDown={(e) => (lastPointer.current = e.pointerType)}
-                onPointerEnter={(e) => {
-                  if (e.pointerType !== "mouse" || !s.frame || zoomRef.current?.pinned) return;
-                  clearTimer();
-                  // short delay: passing over a tile on the way somewhere else does not open it
-                  hoverTimer.current = setTimeout(() => setZoom({ key: b.key, pinned: false }), zoomRef.current ? 0 : 140);
-                }}
-                onPointerLeave={(e) => {
-                  if (e.pointerType !== "mouse") return;
-                  clearTimer();
-                  setZoom((z) => (z && !z.pinned && z.key === b.key ? null : z));
-                }}
-                onClick={() => {
-                  // tap (touch/pen) or keyboard: open pinned, close with X, tap outside or Esc
-                  if (lastPointer.current === "mouse" && zoomRef.current?.key === b.key && !zoomRef.current.pinned) {
-                    setZoom({ key: b.key, pinned: true }); // a click while hovering pins it
-                    return;
-                  }
-                  clearTimer();
-                  setZoom({ key: b.key, pinned: true });
-                }}
-                className="relative block aspect-[1000/640] w-full cursor-zoom-in bg-zinc-100 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-zinc-900 disabled:cursor-default"
+                data-testid={`bot-${b.key}-steps`}
+                onClick={() => setExpanded(b.key)}
+                aria-label={`${b.name} bot: view the full step log`}
+                className="block w-full px-3 py-2 text-left hover:bg-zinc-50 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-zinc-900"
               >
-                {s.frame ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={`data:image/jpeg;base64,${s.frame}`} alt={`${b.name} bot's browser view`} className="h-full w-full object-cover" />
-                ) : (
-                  <span className="flex h-full items-center justify-center text-xs text-zinc-500">{running ? "Starting browser…" : "Waiting for a trip"}</span>
-                )}
+                <span className="line-clamp-2 text-[11px] text-zinc-600">
+                  {s.steps ? `Step ${s.steps}: ` : ""}
+                  {s.lastReason ?? (s.status === "DONE" ? "Finished" : "Idle")}
+                </span>
+                <span className="mt-0.5 block text-[11px] font-semibold text-zinc-800">{s.log.length ? `View all ${s.log.length} steps →` : "View steps →"}</span>
               </button>
-              <p className="line-clamp-2 px-3 py-2 text-[11px] text-zinc-600">
-                {s.steps ? `Step ${s.steps}: ` : ""}
-                {s.lastReason ?? (s.status === "DONE" ? "Finished" : "Idle")}
-              </p>
             </section>
           );
         })}
       </div>
-      {zoom && (
-        <ZoomView
-          key={`${zoom.key}-${zoom.pinned}`}
-          zoom={zoom}
-          bots={bots}
-          onClose={() => {
-            const k = zoom.key;
-            setZoom(null);
-            tileRefs.current[k]?.focus();
-          }}
-        />
-      )}
+      {zoomView}
     </div>
   );
 }

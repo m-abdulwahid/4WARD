@@ -98,6 +98,15 @@ export default function RouteCard({
             Over your ${budget.toFixed(2)} budget
           </p>
         )}
+        {r?.pareto_optimal && (
+          <p
+            data-testid={`pareto-${bot.key}`}
+            title="No other computed route beats this one on time, cost, CO2, transfers, and walking distance all at once."
+            className="mt-2 inline-block rounded-full bg-zinc-900 px-2 py-0.5 text-[11px] font-semibold text-white"
+          >
+            Pareto-optimal
+          </p>
+        )}
         {r ? null : state.status === "FAILED" ? (
           <p className="mt-2 text-xs text-red-700">Failed: {state.error ?? "unknown error"}. The other bots are unaffected.</p>
         ) : (
@@ -125,7 +134,11 @@ export default function RouteCard({
                   ))}
                 </ul>
               ) : null}
-              <p className="mt-2 text-xs text-zinc-500">Reliability: not available yet (delay history scoring is not built).</p>
+              <p className="mt-2 text-xs text-zinc-500">
+                {r.reliability
+                  ? `Reliability: made it on ${r.reliability.reliability_pct}% of the last ${r.reliability.history_days} matching day(s) (${r.reliability.basis}, from TTC delay history).`
+                  : "Reliability: not enough TTC delay history yet for this route and time."}
+              </p>
             </div>
           )}
           <button

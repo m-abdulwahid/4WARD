@@ -16,6 +16,7 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 from . import bikeshare, geo, ingest, planner, runs  # noqa: E402
 from .db import Store, store  # noqa: E402
 from .config import ASSUMPTIONS, EMISSIONS_G_PER_KM, SPEEDS_KMH  # noqa: E402
+from .security import BotTokenMiddleware, RateLimitMiddleware, cors_origins  # noqa: E402
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -40,7 +41,16 @@ async def _poll_feeds(secs: int) -> None:
 
 
 app = FastAPI(title="4WARD API", lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+# Last added runs first: CORS outermost, then bot token, then rate limit.
+app.add_middleware(RateLimitMiddleware)
+app.add_middleware(BotTokenMiddleware)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_origins(),
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "X-Bot-Token"],
+)
 
 
 class Place(BaseModel):
@@ -67,8 +77,13 @@ async def resolve(p: Place) -> dict:
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "replay": os.environ.get("REPLAY") == "1",
-            "gemini_configured": bool(os.environ.get("GEMINI_API_KEY"))}
+    return {
+        "status": "ok",
+        "replay": os.environ.get("REPLAY") == "1",
+        "gemini_configured": bool(os.environ.get("GEMINI_API_KEY")),
+        "bot_token_required": bool(os.environ.get("BOT_TOKEN", "").strip()),
+        "backend_db": store.backend,
+    }
 
 
 @app.get("/assumptions")
@@ -183,3 +198,9 @@ async def insights_ttc(hours: int = 24, top: int = 6):
 @app.get("/insights/bikes")
 async def insights_bikes(hours: int = 24):
     return await asyncio.to_thread(_insights, "bikes", hours, 0)
+
+
+@app.get("/live")
+async def live(route: str | None = None, history_hours: int = 24):
+    """Latest Tiger Data poll (raw tables), 3h sparkline, and hourly CAGG history for one route."""
+    return await asyncio.to_thread(store.live, route, history_hours)

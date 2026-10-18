@@ -3,14 +3,17 @@
 Numbers (time/cost/emissions) are computed here, deterministically. LLM bots only decide
 WHICH modes/constraints to try; they never produce route numbers.
 """
+import asyncio
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, Field
 
-from . import bikeshare, fares, osm, transit
+from . import bikeshare, fares, osm, pareto, reliability, transit
 from .config import SPEEDS_KMH, traffic_multiplier
 from .geo import haversine_km
 
+TORONTO = ZoneInfo("America/Toronto")
 ALL_MODES = ["walk", "bike", "ebike", "bikeshare", "drive", "rideshare", "transit", "park_ride"]
 NEEDS = {"bike": "has_bike", "ebike": "has_ebike", "drive": "has_car", "park_ride": "has_car"}
 
@@ -93,7 +96,9 @@ def _unavailable(cid, title, why):
 
 
 async def plan(origin: tuple[float, float], dest: tuple[float, float], c: Constraints) -> dict:
-    now = datetime.now()
+    # Must be Toronto wall-clock time, not server-local: on a UTC host (Railway) datetime.now() is
+    # 4-5 hours off, which silently breaks rush-hour traffic_multiplier() and reliability dow/hour matching.
+    now = datetime.now(TORONTO)
     depart = _hhmm(c.depart_at, now) or now
     hour = depart.hour
     tm = traffic_multiplier(hour)
@@ -229,6 +234,9 @@ async def plan(origin: tuple[float, float], dest: tuple[float, float], c: Constr
             next(l for l in legs[1:] if l["mode"] != "walk")["cost"] = fare
             out.append(_finish("park_ride", "Park & ride", legs, c, depart, hour, max(0, opt["boardings"] - 1),
                                [f"Park at {lot[0]} (lot fee is an estimate), then TTC ${fare:.2f}"]))
+
+    pareto.mark(out)
+    await asyncio.to_thread(reliability.annotate, out, c.model_dump(), depart)
 
     return {"origin": list(origin), "destination": list(dest), "depart": depart.strftime("%H:%M"),
             "candidates": out, "traffic_multiplier": tm,

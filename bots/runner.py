@@ -4,7 +4,7 @@ import base64
 import time
 from typing import Awaitable, Callable
 
-from playwright.async_api import Browser, Page
+from playwright.async_api import BrowserContext, Page
 
 from .brain import FallbackBrain, validate
 from .profiles import PROFILES
@@ -44,14 +44,18 @@ async def _frames(page: Page, key: str, cb: Emit | None, stop: asyncio.Event, fp
             pass
 
 
-async def run_bot(browser: Browser, key: str, user: dict, base_url: str, emit: Emit | None = None,
-                  max_steps: int = 24, timeout_s: float = 120, stream_frames: bool = True) -> dict:
-    """user = {"origin": str, "destination": str, "constraints": {...}}. Returns the bot's result dict."""
+async def run_bot(ctx: BrowserContext, key: str, user: dict, base_url: str, emit: Emit | None = None,
+                  max_steps: int = 24, timeout_s: float = 120, stream_frames: bool = True,
+                  avoid_ids: set[str] | None = None) -> dict:
+    """user = {"origin": str, "destination": str, "constraints": {...}}. Returns the bot's result dict.
+
+    ctx is a browser context the bot owns exclusively (a fresh local context, or a Steel session's
+    context) and closes when done.
+    """
     prof = PROFILES[key]
     t0 = time.time()
     steps: list[dict] = []
-    ctx = await browser.new_context(viewport={"width": 1000, "height": 640})
-    page = await ctx.new_page()
+    page = ctx.pages[0] if ctx.pages else await ctx.new_page()
     stop = asyncio.Event()
     frame_task = None
     result = {"bot": key, "name": prof.name, "status": "FAILED", "route": None, "steps": steps, "brain": "rule", "error": None}
@@ -62,7 +66,7 @@ async def run_bot(browser: Browser, key: str, user: dict, base_url: str, emit: E
         await page.wait_for_function("window.__4ward !== undefined", timeout=60000)  # React hydrated
         if stream_frames:
             frame_task = asyncio.create_task(_frames(page, key, emit, stop, 2.5))
-        brain = FallbackBrain(key, user)
+        brain = FallbackBrain(key, user, avoid_ids=avoid_ids)
         result["brain"] = brain.name
         history: list[dict] = []
         for n in range(1, max_steps + 1):
