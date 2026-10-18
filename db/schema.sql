@@ -93,3 +93,44 @@ SELECT add_continuous_aggregate_policy('ttc_route_hourly',
 SELECT add_continuous_aggregate_policy('bike_system_hourly',
     start_offset => INTERVAL '3 days', end_offset => INTERVAL '1 minute', schedule_interval => INTERVAL '5 minutes',
     if_not_exists => TRUE);
+
+
+-- TTC service alerts from the official GTFS-RT alerts feed (Open Government Licence - Toronto; storing is allowed with attribution:
+-- "Contains information licensed under the Open Government Licence - Toronto"). One row per alert per route, updated in place.
+CREATE TABLE IF NOT EXISTS ttc_alerts (
+    alert_id    text        NOT NULL,
+    route_id    text        NOT NULL,
+    effect      text,
+    cause       text,
+    header      text,
+    description text,
+    start_ts    timestamptz,
+    end_ts      timestamptz,
+    first_seen  timestamptz NOT NULL DEFAULT now(),
+    last_seen   timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (alert_id, route_id)
+);
+
+-- City of Toronto road restrictions and closures (open data "Road Restrictions", a live feed; same licence and attribution).
+-- The collector is OFF by default (ROAD_RESTRICTIONS_ENABLED); this table stays empty until it is switched on.
+CREATE TABLE IF NOT EXISTS road_restrictions (
+    id               text PRIMARY KEY,
+    road             text,
+    name             text,
+    lat              double precision NOT NULL,
+    lon              double precision NOT NULL,
+    restriction_type text,
+    sub_type         text,
+    max_impact       text,
+    curr_impact      text,
+    planned          boolean,
+    start_ts         timestamptz,
+    end_ts           timestamptz,
+    description      text,
+    last_updated     timestamptz,
+    last_seen        timestamptz NOT NULL DEFAULT now()
+);
+
+-- There is deliberately NO traffic_flow_obs table. TomTom's terms on storing Traffic Flow results are not confirmed to allow
+-- it on the free plan, so TomTom values are only ever held in memory for a few minutes (backend/tomtom.py) and are never written
+-- to this database, to SQLite, to files or to logs. If TomTom's terms or support later allow storage, create the table then.

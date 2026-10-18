@@ -37,12 +37,12 @@ def retime(legs: list[dict], depart: datetime, now: datetime | None = None) -> t
         timing = leg.get("timing")
         wait = float(leg.get("wait_s", 0) or 0) if timing is None else 0.0
         if timing == "road":
-            f, prov = conditions.road_factor(t, now)
+            f, prov = conditions.road_factor(t, now, leg)
             wait = float(leg.get("fixed_extra_s", 0))
             dur = leg["base_s"] * f + wait
             l.update(traffic_factor=round(f, 2), traffic_source=prov)
         elif timing == "bus_est":
-            f, prov = conditions.road_factor(t, now)
+            f, prov = conditions.road_factor(t, now, leg)
             wait = float(leg["est_wait_s"])
             dur = leg["base_s"] * (f / 1.2) + wait
             l.update(traffic_factor=round(f, 2), traffic_source=prov)
@@ -60,6 +60,14 @@ def retime(legs: list[dict], depart: datetime, now: datetime | None = None) -> t
                     dep = dep + timedelta(seconds=delay)
                     source = f"scheduled departure (GTFS) + observed delay {round(delay)} s (TTC realtime)"
                 wait = max(0.0, (dep - t).total_seconds())
+                if leg.get("mode") == "lrt_streetcar" and leg.get("corridors"):
+                    # a streetcar shares the road: stretch or shrink its scheduled run time by live vs typical conditions
+                    c = conditions.leg_conditions(leg, dep, now)
+                    if c["source"] == conditions.LIVE:
+                        adj = max(0.9, min(2.5, c["factor"] / c["typical"]))
+                        ride = ride * adj
+                        source += f" + road conditions x{adj:.2f} ({conditions.LIVE})"
+                        l.update(traffic_factor=round(c["factor"], 2), traffic_source=conditions.LIVE)
                 dur = wait + ride
                 l.update(provenance=source, departs_at=_hm(dep), scheduled=True)
             else:  # no timetable for this line, or no service that day: ESTIMATED headway

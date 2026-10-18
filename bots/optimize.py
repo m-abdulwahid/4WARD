@@ -18,7 +18,12 @@ INF = float("inf")
 
 
 def on_time_pct(c: dict) -> float | None:
-    """The one on-time function every card chip and the Reliable bot use. None = no estimate yet (never a made-up 100)."""
+    """The one on-time function every card chip and the Reliable bot use: the engine's on-time probability (backend/ontime.py:
+    TTC delay history for transit legs, TomTom live ratio plus a documented default variability for road legs). Falls back to
+    the older history-only figure; None = no estimate (never a made-up 100)."""
+    ot = c.get("on_time")
+    if ot and ot.get("pct") is not None:
+        return float(ot["pct"])
     rel = c.get("reliability")
     return float(rel["reliability_pct"]) if rel else None
 

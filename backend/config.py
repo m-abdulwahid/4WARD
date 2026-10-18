@@ -3,6 +3,8 @@
 None of these are live data: they are explicit assumptions, flagged `verify` where the real
 number should be confirmed before the demo (fares and prices change).
 """
+import os
+
 
 ASSUMPTIONS = {
     "ttc_fare_presto": {"value": 3.30, "unit": "CAD", "note": "TTC adult single fare with Presto (verify)"},
@@ -56,6 +58,19 @@ def traffic_multiplier(hour: int) -> float:
 PARKING_SEARCH_MIN = {"downtown": 8.0, "other": 3.0}
 PARKING_WALK_MIN = {"downtown": 4.0, "other": 2.0}
 PARK_RIDE_LOT_TO_PLATFORM_MIN = 4.0
+
+# TomTom live traffic (backend/tomtom.py). TomTom's terms on storing results are NOT confirmed to allow it on the free plan, so
+# nothing from TomTom is ever written to a database, file or log: the latest values live in memory for TOMTOM_TTL_S and are
+# then gone. TOMTOM_STORE exists so storage can be switched on later if TomTom's terms or support allow it; today it is
+# false and no storage code path exists (turning it on only makes the app say so, see tomtom.store_requested()).
+TOMTOM_STORE = os.environ.get("TOMTOM_STORE", "false").strip().lower() in ("1", "true", "yes")
+TOMTOM_TTL_S = 300
+TOMTOM_FREE_REQUESTS_PER_MONTH = 20000  # Traffic Flow Segment Data free tier on docs.tomtom.com/pricing ("Free 20K monthly")
+TOMTOM_OLDER_FREE_PER_DAY = 2500        # what an older TomTom pricing page said; both are respected, the smaller daily share wins
+TOMTOM_BUDGET_FRACTION = 0.8            # never use more than this share of the free allowance
+TOMTOM_DAILY_REQUEST_BUDGET = int(TOMTOM_BUDGET_FRACTION * min(TOMTOM_FREE_REQUESTS_PER_MONTH / 30, TOMTOM_OLDER_FREE_PER_DAY))
+# How much slower than usual a trip time can turn out (documented DEFAULTS, ESTIMATED: not measured). Used by backend/ontime.py.
+ONTIME_CV = {"road_live": 0.15, "road_typical": 0.25, "walk": 0.08, "bike": 0.12, "transit_no_history_s": 90.0}
 
 # Time accuracy (backend/schedule.py). All values are settings you can change; they are shown as ESTIMATES in the UI.
 BOARDING_BUFFER_S = 60     # arrive at a stop this long before the vehicle you plan to catch (first boarding)

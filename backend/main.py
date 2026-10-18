@@ -13,7 +13,7 @@ from pydantic import BaseModel
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
-from . import bikeshare, geo, ingest, planner, runs, trip  # noqa: E402
+from . import bikeshare, disruptions, geo, ingest, planner, runs, tomtom, trip  # noqa: E402
 from .db import Store, store  # noqa: E402
 from .config import ASSUMPTIONS, EMISSIONS_G_PER_KM, SPEEDS_KMH  # noqa: E402
 from .security import BotTokenMiddleware, RateLimitMiddleware, cors_origins  # noqa: E402
@@ -31,7 +31,11 @@ async def lifespan(_: FastAPI):
 
 
 async def _poll_feeds(secs: int) -> None:
+    last_roads = 0.0
     while True:
+        if time.time() - last_roads >= disruptions.POLL_EVERY_S:
+            last_roads = time.time()
+            await disruptions.poll_road_restrictions()  # does nothing unless ROAD_RESTRICTIONS_ENABLED=true
         try:
             raw = await ingest.fetch_raw()
             await asyncio.to_thread(ingest.store_raw, raw, "live")
@@ -86,7 +90,16 @@ async def health():
         "gemini_configured": bool(os.environ.get("GEMINI_API_KEY")),
         "bot_token_required": bool(os.environ.get("BOT_TOKEN", "").strip()),
         "backend_db": store.backend,
+        "tomtom_configured": bool(os.environ.get("TOMTOM_API_KEY", "").strip()),
+        "tomtom_stored": False,  # TomTom values are held in memory only, never stored (backend/tomtom.py)
+        "road_restrictions_enabled": disruptions.enabled(),
     }
+
+
+@app.get("/conditions")
+async def conditions_status():
+    """Whether live road conditions are in use right now. Reads memory only: it never polls TomTom and never returns TomTom values."""
+    return tomtom.status()
 
 
 @app.get("/assumptions")

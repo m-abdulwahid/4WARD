@@ -33,7 +33,7 @@ from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, field_validator
 
-from . import fares, highways, osm, pareto, planner, schedule
+from . import conditions, fares, highways, ontime, osm, pareto, planner, schedule, tomtom
 from .config import LEAVE_BY_SEARCH_MIN, PARKING_WALK_MIN, traffic_multiplier
 from .geo import haversine_km
 
@@ -412,6 +412,7 @@ def _build(points, picks, sched, bad, depart, finish, deadline, order_prefix, st
         cand["violates"] = sorted(set(viol))
         cand["notes"] += [f"Not allowed: {v}" for v in cand["violates"] if v.startswith("car_left_behind")]
     if deadline:
+        cand["deadline_iso"] = deadline.isoformat(timespec="seconds")
         cand["meets_deadline"] = total_arrive <= deadline
         cand["leave_by"] = _hm(deadline - timedelta(minutes=(total_arrive - depart).total_seconds() / 60))
     if len(rels) == len([c for c in picks if any(l.get("route_id") for l in c["legs"])]) and rels:
@@ -503,7 +504,7 @@ async def _exit_leg(origin: dict, exit_pt: dict, depart: datetime) -> dict:
             "bag_friendliness": 1.0, "notes": [f"You start in your car on {origin['highway']}: first drive to the next valid exit before any other mode (ESTIMATE of the exit)"],
             "legs": [{"mode": "car", "label": f"Drive on {origin['highway']} to {exit_pt['name']}", "from": [origin["lat"], origin["lon"]],
                       "to": [exit_pt["lat"], exit_pt["lon"]], "distance_km": g["distance_km"], "duration_s": dur, "geometry": g["geometry"],
-                      "timing": "road", "base_s": g["duration_s"],
+                      "timing": "road", "base_s": g["duration_s"], "corridors": tomtom.profile_for(g["geometry"]),
                       "provenance": g.get("provenance", "estimated"), "cost": fares.driving_cost(g["distance_km"], False),
                       "co2_kg": fares.emissions_kg("car", g["distance_km"])}]}
 
@@ -566,6 +567,7 @@ async def _return_options(points: list[dict], leg_sets: list[list[dict]], constr
 async def _plan_trip(origin, stops, destination, constraints, optimize_order) -> dict:
     now = planner._now(constraints)
     depart = _clock(constraints.depart_at, now) if constraints.depart_at else now.replace(second=0, microsecond=0)
+    await conditions.prepare(depart, now)  # fresh live road conditions if the trip starts soon (never fails the plan)
 
     def point(p: dict, idx: int, kind: str) -> dict:
         typ = p.get("type") if p.get("type") in ("pickup", "dropoff", "park", "alight") or kind == "stop" else kind
@@ -642,6 +644,7 @@ async def _plan_trip(origin, stops, destination, constraints, optimize_order) ->
                 trips += _combine(sp, _limit(sets), constraints, depart, prefix, returns)
 
     pareto.mark(trips)
+    await asyncio.to_thread(ontime.annotate, trips, now)   # on-time probability + what could delay you, for every trip
     base_plan = plans[0] if plans else {}
     return {"origin": [origin["lat"], origin["lon"]], "destination": [destination["lat"], destination["lon"]],
             "depart": _hm(depart), "candidates": trips, "traffic_multiplier": base_plan.get("traffic_multiplier", 1.0),

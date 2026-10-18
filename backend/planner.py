@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, Field, model_validator
 
-from . import bikeshare, fares, highways, osm, pareto, reliability, schedule, transit
+from . import bikeshare, conditions, fares, highways, ontime, osm, pareto, reliability, schedule, tomtom, transit
 from .config import PARK_RIDE_LOT_TO_PLATFORM_MIN, PARKING_SEARCH_MIN, PARKING_WALK_MIN, SPEEDS_KMH, traffic_multiplier
 from .geo import haversine_km
 
@@ -137,6 +137,9 @@ def _finish(cand_id: str, title: str, legs: list[dict], c: Constraints, depart: 
             else:
                 meets = False  # cannot arrive by then even leaving right now
         leave_by = latest
+    for l in legs:  # which downtown corridors each road-like leg runs along (static geography, no TomTom data)
+        if (l.get("timing") in ("road", "bus_est") or l.get("mode") == "lrt_streetcar") and "corridors" not in l:
+            l["corridors"] = tomtom.profile_for(l["geometry"])
     legs, arrive = schedule.retime(legs, depart, now)
     if ab and meets is None:
         meets = arrive <= ab
@@ -291,6 +294,7 @@ async def plan(origin: tuple[float, float], dest: tuple[float, float], c: Constr
     depart = _hhmm(c.depart_at, now) or now
     # When is the trip actually travelled? Transit paths are chosen by which lines run at that time. Planning backwards from a
     # deadline means travelling shortly before it, not right now.
+    await conditions.prepare(depart, now)  # fresh live road conditions if the trip starts soon (never fails the plan)
     path_at = depart
     if c.arrive_by and not c.depart_at:
         dl = _deadline(c.arrive_by, depart, now, backward=True)
@@ -437,6 +441,7 @@ async def plan(origin: tuple[float, float], dest: tuple[float, float], c: Constr
 
     pareto.mark(out)
     await asyncio.to_thread(reliability.annotate, out, c.model_dump(), depart)
+    await asyncio.to_thread(ontime.annotate, out, now)   # on-time probability + what could delay you, for every route
 
     return {"origin": list(origin), "destination": list(dest), "depart": depart.strftime("%H:%M"),
             "candidates": out, "traffic_multiplier": tm,

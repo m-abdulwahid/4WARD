@@ -66,6 +66,34 @@ def summarize_ttc(trips_bin: bytes, alerts_bin: bytes) -> list[dict]:
              "alerts": alerts.get(r, 0)} for r in sorted(routes)]
 
 
+def _text(ts) -> str | None:
+    """English text of a GTFS-RT TranslatedString (first translation if there is no English one)."""
+    tr = list(ts.translation)
+    if not tr:
+        return None
+    en = next((t for t in tr if (t.language or "en").lower().startswith("en")), tr[0])
+    return en.text.strip() or None
+
+
+def parse_alerts(alerts_bin: bytes) -> list[dict]:
+    """TTC service alerts from the official GTFS-RT feed as one record per (alert, route), ready for Store.upsert_alerts."""
+    from google.transit import gtfs_realtime_pb2 as pb
+
+    f = pb.FeedMessage()
+    f.ParseFromString(alerts_bin)
+    out = []
+    for e in f.entity:
+        if not e.HasField("alert"):
+            continue
+        a = e.alert
+        start = min((p.start for p in a.active_period if p.start), default=None)
+        end = max((p.end for p in a.active_period if p.end), default=None)
+        for rid in sorted({ie.route_id for ie in a.informed_entity if ie.route_id}):
+            out.append({"alert_id": e.id, "route_id": rid, "effect": pb.Alert.Effect.Name(a.effect), "cause": pb.Alert.Cause.Name(a.cause),
+                        "header": _text(a.header_text), "description": _text(a.description_text), "start_ts": start, "end_ts": end})
+    return out
+
+
 async def fetch_raw() -> dict:
     async with httpx.AsyncClient(timeout=20) as cl:
         g, t, a = await asyncio.gather(cl.get(GBFS), cl.get(TTC_TRIPS), cl.get(TTC_ALERTS))
@@ -81,6 +109,11 @@ def store_raw(raw: dict, source: str) -> tuple[int, int]:
     ts = time.time() if source == "live" else raw["ts"] + (time.time() - raw["ts"])  # replay stamps "now"
     store.insert_ttc(ts, ttc, source)
     store.insert_bike(ts, b["stations"], b["bikes"], b["ebikes"], b["docks"], source)
+    if source == "live":  # service alerts are stored too (Open Government Licence - Toronto); replayed ones are not "now"
+        try:
+            store.upsert_alerts(parse_alerts(base64.b64decode(raw["alerts_b64"])), ts)
+        except Exception:  # noqa: BLE001 - alerts are best effort and must never stop the delay and bike polls
+            pass
     return len(ttc), b["bikes"]
 
 

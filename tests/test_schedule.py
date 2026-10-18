@@ -179,11 +179,16 @@ def test_road_legs_use_the_conditions_at_the_moment_they_start(monkeypatch):
     assert pickup[0]["duration_s"] == 840 and pickup[0]["wait_s"] == 240
 
 
-def test_observed_road_conditions_override_typical_only_for_departures_soon(monkeypatch):
-    monkeypatch.setattr(conditions, "_observed", lambda when: 2.0)
-    soon, _ = schedule.retime([road(600)], dt(5, 8, 10), now=dt(5, 8, 0))
-    far, _ = schedule.retime([road(600)], dt(5, 14, 0), now=dt(5, 8, 0))
-    assert soon[0]["duration_s"] == 1200 and soon[0]["traffic_source"] == "observed"
+def test_live_road_conditions_override_typical_only_for_departures_soon(monkeypatch):
+    import time as _time
+
+    from backend import tomtom
+
+    tomtom._values["queen-spadina"] = {"ratio": 0.5, "current": 10, "free": 20, "at": _time.time()}     # half speed: x2
+    leg = {**road(600), "distance_km": 1.0, "corridors": {"queen-spadina": 1000}}                      # the whole leg is on that corridor
+    soon, _ = schedule.retime([leg], dt(5, 8, 10), now=dt(5, 8, 0))
+    far, _ = schedule.retime([leg], dt(5, 14, 0), now=dt(5, 8, 0))
+    assert soon[0]["duration_s"] == 1200 and soon[0]["traffic_source"] == tomtom.LABEL_LIVE
     assert far[0]["duration_s"] == 600 * 1.2 and "ESTIMATED" in far[0]["traffic_source"]
 
 

@@ -25,6 +25,10 @@ CREATE INDEX IF NOT EXISTS ix_bike ON bike_system_snapshot(ts);
 CREATE TABLE IF NOT EXISTS bot_runs (ts INTEGER NOT NULL, run_id TEXT NOT NULL, prompt TEXT NOT NULL, result TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS bot_steps (ts INTEGER NOT NULL, run_id TEXT NOT NULL, bot TEXT NOT NULL, step INTEGER NOT NULL,
   brain TEXT, action TEXT NOT NULL, ok INTEGER NOT NULL DEFAULT 1, note TEXT);
+CREATE TABLE IF NOT EXISTS ttc_alerts (alert_id TEXT NOT NULL, route_id TEXT NOT NULL, effect TEXT, cause TEXT, header TEXT, description TEXT,
+  start_ts INTEGER, end_ts INTEGER, first_seen INTEGER NOT NULL, last_seen INTEGER NOT NULL, PRIMARY KEY (alert_id, route_id));
+CREATE TABLE IF NOT EXISTS road_restrictions (id TEXT PRIMARY KEY, road TEXT, name TEXT, lat REAL, lon REAL, restriction_type TEXT, sub_type TEXT,
+  max_impact TEXT, curr_impact TEXT, planned INTEGER, start_ts INTEGER, end_ts INTEGER, description TEXT, last_updated INTEGER, last_seen INTEGER NOT NULL);
 """
 
 
@@ -136,16 +140,17 @@ class Store:
                               "WHERE ts >= %s GROUP BY b ORDER BY b", (since,), fetch=True)
         return [{"bucket": int(r[0]), "avg_bikes": r[1], "avg_ebikes": r[2], "avg_docks": r[3], "min_bikes": r[4]} for r in rows]
 
-    def ttc_daily_at_dow_hour(self, route_id: str, dow: int, hour: int, days: int = 56) -> dict[str, float]:
+    def ttc_daily_at_dow_hour(self, route_id: str, dow: int, hour: int, days: int = 56, real_only: bool = False) -> dict[str, float]:
         """{date_str: avg_delay_s} for this route at this day-of-week/hour, most recent `days` days.
         Used by reliability scoring to 'replay' historical days. dow: 0=Sunday (matches SQLite %w and
         Postgres extract(dow)). Times are Toronto-local on Postgres; UTC on the SQLite fallback
         (acceptable for the offline/local demo path, not used in production with Tiger Data)."""
         since = int(time.time()) - days * 86400
+        sim = " AND source <> 'simulated'" if real_only else ""  # real polls only: simulated backfill is never evidence
         if self.pg:
             rows = self._exec(
                 "SELECT (date_trunc('day', ts AT TIME ZONE 'America/Toronto'))::date::text, avg(avg_delay_s) "
-                "FROM ttc_route_snapshot WHERE route_id = %s "
+                "FROM ttc_route_snapshot WHERE route_id = %s" + sim + " "
                 "AND extract(dow FROM ts AT TIME ZONE 'America/Toronto') = %s "
                 "AND extract(hour FROM ts AT TIME ZONE 'America/Toronto') = %s "
                 "AND ts >= to_timestamp(%s) AND avg_delay_s IS NOT NULL GROUP BY 1",
@@ -153,7 +158,7 @@ class Store:
         else:
             rows = self._exec(
                 "SELECT strftime('%Y-%m-%d', ts, 'unixepoch'), AVG(avg_delay_s) FROM ttc_route_snapshot "
-                "WHERE route_id = %s AND CAST(strftime('%w', ts, 'unixepoch') AS INTEGER) = %s "
+                "WHERE route_id = %s" + sim + " AND CAST(strftime('%w', ts, 'unixepoch') AS INTEGER) = %s "
                 "AND CAST(strftime('%H', ts, 'unixepoch') AS INTEGER) = %s AND ts >= %s "
                 "AND avg_delay_s IS NOT NULL GROUP BY 1",
                 (route_id, dow, hour, since), fetch=True)
@@ -182,6 +187,59 @@ class Store:
             out[t] = {r[0]: r[1] for r in rows}
         return out
 
+    # -- disruptions we ARE allowed to store: TTC service alerts and City of Toronto road restrictions (Open Government
+    #    Licence - Toronto). Nothing from TomTom is ever stored here (see backend/tomtom.py).
+    def upsert_alerts(self, rows: list[dict], ts: float) -> None:
+        """One row per (alert, route), updated in place; last_seen moves forward on every poll that still sees the alert."""
+        if not rows:
+            return
+        t = int(ts)
+        ph = "to_timestamp(%s)" if self.pg else "%s"
+        sql = (f"INSERT INTO ttc_alerts (alert_id,route_id,effect,cause,header,description,start_ts,end_ts,first_seen,last_seen) "
+               f"VALUES (%s,%s,%s,%s,%s,%s,{ph},{ph},{ph},{ph}) ON CONFLICT (alert_id, route_id) DO UPDATE SET "
+               f"effect=EXCLUDED.effect, cause=EXCLUDED.cause, header=EXCLUDED.header, description=EXCLUDED.description, "
+               f"start_ts=EXCLUDED.start_ts, end_ts=EXCLUDED.end_ts, last_seen=EXCLUDED.last_seen")
+        self._exec(sql, many=[(r["alert_id"], r["route_id"], r.get("effect"), r.get("cause"), r.get("header"), r.get("description"),
+                               r.get("start_ts"), r.get("end_ts"), t, t) for r in rows])
+
+    def recent_alerts(self, route_ids: list[str] | None, max_age_s: int = 1800) -> list[dict]:
+        """Alerts seen in the last `max_age_s` seconds that have not ended (optionally only for these routes)."""
+        now = int(time.time())
+        ph = "to_timestamp(%s)" if self.pg else "%s"
+        ep = "extract(epoch from {c})::bigint" if self.pg else "{c}"
+        where, params = [f"last_seen >= {ph}", f"(end_ts IS NULL OR end_ts >= {ph})"], [now - max_age_s, now]
+        if route_ids:
+            where.append("route_id IN (" + ",".join(["%s"] * len(route_ids)) + ")")
+            params += list(route_ids)
+        rows = self._exec(f"SELECT alert_id, route_id, effect, cause, header, description, {ep.format(c='last_seen')} FROM ttc_alerts WHERE "
+                          + " AND ".join(where) + " ORDER BY last_seen DESC LIMIT 500", tuple(params), fetch=True)
+        return [{"alert_id": r[0], "route_id": r[1], "effect": r[2], "cause": r[3], "header": r[4], "description": r[5], "last_seen": int(r[6])} for r in rows or []]
+
+    def upsert_restrictions(self, rows: list[dict], ts: float) -> None:
+        if not rows:
+            return
+        t = int(ts)
+        ph = "to_timestamp(%s)" if self.pg else "%s"
+        sql = (f"INSERT INTO road_restrictions (id,road,name,lat,lon,restriction_type,sub_type,max_impact,curr_impact,planned,start_ts,end_ts,description,last_updated,last_seen) "
+               f"VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,{ph},{ph},%s,{ph},{ph}) ON CONFLICT (id) DO UPDATE SET road=EXCLUDED.road, name=EXCLUDED.name, "
+               f"lat=EXCLUDED.lat, lon=EXCLUDED.lon, restriction_type=EXCLUDED.restriction_type, sub_type=EXCLUDED.sub_type, max_impact=EXCLUDED.max_impact, "
+               f"curr_impact=EXCLUDED.curr_impact, planned=EXCLUDED.planned, start_ts=EXCLUDED.start_ts, end_ts=EXCLUDED.end_ts, "
+               f"description=EXCLUDED.description, last_updated=EXCLUDED.last_updated, last_seen=EXCLUDED.last_seen")
+        self._exec(sql, many=[(r["id"], r.get("road"), r.get("name"), r["lat"], r["lon"], r.get("restriction_type"), r.get("sub_type"), r.get("max_impact"),
+                               r.get("curr_impact"), bool(r.get("planned")) if self.pg else int(bool(r.get("planned"))), r.get("start_ts"), r.get("end_ts"),
+                               r.get("description"), r.get("last_updated"), t) for r in rows])
+
+    def disruption_counts(self) -> dict:
+        """What is actually stored, for the Tiger Data panel."""
+        out = {}
+        ep = "extract(epoch from max(last_seen))::bigint" if self.pg else "max(last_seen)"
+        for table in ("ttc_alerts", "road_restrictions"):
+            try:
+                rows = self._exec(f"SELECT count(*), {ep} FROM {table}", fetch=True)
+                out[table] = {"rows": int(rows[0][0]), "last_seen": int(rows[0][1]) if rows[0][1] else None}
+            except Exception:  # noqa: BLE001 - table not created yet
+                out[table] = {"rows": 0, "last_seen": None}
+        return out
     def delete_simulated(self) -> None:
         for t in ("ttc_route_snapshot", "bike_system_snapshot"):
             self._exec(f"DELETE FROM {t} WHERE source = 'simulated'")
@@ -218,6 +276,7 @@ class Store:
                 "routes": latest_routes,
                 "bikes": bikes,
             },
+            "stored_disruptions": self.disruption_counts(),  # TTC alerts and road restrictions: what we store besides the feeds
             "sparkline": sparkline,
             "history": history,
             "footer": {

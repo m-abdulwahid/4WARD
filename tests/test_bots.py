@@ -291,7 +291,9 @@ async def test_gemini_cannot_compute_before_the_shared_setup_is_complete(monkeyp
 
     b.gemini = ComputesEarly()
     a = await b.next_action(page, [])
-    assert a["brain"] == "rule" and a["testid"] == "mode-toggle-rideshare"  # the rule brain turns the missing mode on
+    # computing early is never executed: the missing mode is switched on first (the merged-in guard swaps the click for a
+    # corrective one; the older fallback let the rule brain do it) -- either way the first action is the mode toggle
+    assert a["action"] == "click" and a["testid"] == "mode-toggle-rideshare"
 
 
 def test_mode_fix_returns_none_when_toggles_already_match():
