@@ -66,6 +66,27 @@ def summarize_ttc(trips_bin: bytes, alerts_bin: bytes) -> list[dict]:
              "alerts": alerts.get(r, 0)} for r in sorted(routes)]
 
 
+def parse_alerts(alerts_bin: bytes) -> list[dict]:
+    """One row per (route, alert): cause/effect/header/description, for backend/reliability.py's
+    'what could delay you' list. summarize_ttc() above only counts alerts per route; this keeps the text."""
+    from google.transit import gtfs_realtime_pb2 as pb
+
+    f = pb.FeedMessage()
+    f.ParseFromString(alerts_bin)
+    out = []
+    for e in f.entity:
+        if not e.HasField("alert"):
+            continue
+        a = e.alert
+        cause = pb.Alert.Cause.Name(a.cause) if a.cause else None
+        effect = pb.Alert.Effect.Name(a.effect) if a.effect else None
+        header = a.header_text.translation[0].text if a.header_text.translation else None
+        desc = a.description_text.translation[0].text if a.description_text.translation else None
+        for route_id in sorted({ie.route_id for ie in a.informed_entity if ie.route_id}):
+            out.append({"route_id": route_id, "cause": cause, "effect": effect, "header_text": header, "description_text": desc})
+    return out
+
+
 async def fetch_raw() -> dict:
     async with httpx.AsyncClient(timeout=20) as cl:
         g, t, a = await asyncio.gather(cl.get(GBFS), cl.get(TTC_TRIPS), cl.get(TTC_ALERTS))
@@ -76,11 +97,13 @@ async def fetch_raw() -> dict:
 def store_raw(raw: dict, source: str) -> tuple[int, int]:
     import base64
 
-    ttc = summarize_ttc(base64.b64decode(raw["trips_b64"]), base64.b64decode(raw["alerts_b64"]))
+    alerts_bin = base64.b64decode(raw["alerts_b64"])
+    ttc = summarize_ttc(base64.b64decode(raw["trips_b64"]), alerts_bin)
     b = summarize_bikes(raw["gbfs"])
     ts = time.time() if source == "live" else raw["ts"] + (time.time() - raw["ts"])  # replay stamps "now"
     store.insert_ttc(ts, ttc, source)
     store.insert_bike(ts, b["stations"], b["bikes"], b["ebikes"], b["docks"], source)
+    store.insert_ttc_alerts(ts, parse_alerts(alerts_bin))
     return len(ttc), b["bikes"]
 
 

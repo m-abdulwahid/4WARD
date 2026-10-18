@@ -28,6 +28,23 @@ CREATE TABLE IF NOT EXISTS bike_system_snapshot (
 );
 SELECT create_hypertable('bike_system_snapshot', 'ts', if_not_exists => TRUE);
 
+-- Official TTC GTFS-RT service alerts, one row per (route, alert) pair per poll. Separate from
+-- ttc_route_snapshot's `alerts` count so the Reliable bot can show the real cause/effect/text.
+CREATE TABLE IF NOT EXISTS ttc_alerts (
+    ts                timestamptz NOT NULL,
+    route_id          text        NOT NULL,
+    cause             text,
+    effect            text,
+    header_text       text,
+    description_text  text
+);
+SELECT create_hypertable('ttc_alerts', 'ts', if_not_exists => TRUE);
+CREATE INDEX IF NOT EXISTS ttc_alerts_route_ts ON ttc_alerts (route_id, ts DESC);
+
+-- No traffic_flow_obs table: TomTom's terms prohibit storing their data (no derivative database),
+-- and caching is allowed only for as long as their response headers permit. backend/tomtom.py keeps
+-- an in-memory, short-TTL ratio instead; nothing from TomTom ever reaches this database.
+
 -- Every 4WARD run (what the user asked and what each bot chose).
 CREATE TABLE IF NOT EXISTS bot_runs (
     ts      timestamptz NOT NULL DEFAULT now(),

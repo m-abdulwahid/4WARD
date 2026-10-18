@@ -22,6 +22,8 @@ CREATE INDEX IF NOT EXISTS ix_ttc ON ttc_route_snapshot(route_id, ts);
 CREATE TABLE IF NOT EXISTS bike_system_snapshot (ts INTEGER NOT NULL, stations INTEGER NOT NULL, bikes INTEGER NOT NULL,
   ebikes INTEGER NOT NULL DEFAULT 0, docks INTEGER NOT NULL, source TEXT NOT NULL DEFAULT 'live');
 CREATE INDEX IF NOT EXISTS ix_bike ON bike_system_snapshot(ts);
+CREATE TABLE IF NOT EXISTS ttc_alerts (ts INTEGER NOT NULL, route_id TEXT NOT NULL, cause TEXT, effect TEXT, header_text TEXT, description_text TEXT);
+CREATE INDEX IF NOT EXISTS ix_alerts ON ttc_alerts(route_id, ts);
 CREATE TABLE IF NOT EXISTS bot_runs (ts INTEGER NOT NULL, run_id TEXT NOT NULL, prompt TEXT NOT NULL, result TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS bot_steps (ts INTEGER NOT NULL, run_id TEXT NOT NULL, bot TEXT NOT NULL, step INTEGER NOT NULL,
   brain TEXT, action TEXT NOT NULL, ok INTEGER NOT NULL DEFAULT 1, note TEXT);
@@ -92,6 +94,35 @@ class Store:
         ph = "to_timestamp(%s)" if self.pg else "%s"
         self._exec(f"INSERT INTO bike_system_snapshot (ts,stations,bikes,ebikes,docks,source) VALUES ({ph},%s,%s,%s,%s,%s)",
                    (int(ts), stations, bikes, ebikes, docks, source))
+
+    def insert_ttc_alerts(self, ts: float, alerts: list[dict]) -> None:
+        if not alerts:
+            return
+        if self.pg:
+            sql = "INSERT INTO ttc_alerts (ts,route_id,cause,effect,header_text,description_text) VALUES (to_timestamp(%s),%s,%s,%s,%s,%s)"
+        else:
+            sql = "INSERT INTO ttc_alerts (ts,route_id,cause,effect,header_text,description_text) VALUES (%s,%s,%s,%s,%s,%s)"
+        self._exec(sql, many=[(int(ts), a["route_id"], a.get("cause"), a.get("effect"), a.get("header_text"), a.get("description_text")) for a in alerts])
+
+    def active_alerts(self, route_id: str, max_age_s: int = 300) -> list[dict]:
+        """This route's most recent distinct alerts, newest poll first, skipping any older than max_age_s."""
+        now = time.time()
+        if self.pg:
+            rows = self._exec("SELECT extract(epoch from ts)::bigint, cause, effect, header_text, description_text FROM ttc_alerts "
+                              "WHERE route_id = %s ORDER BY ts DESC LIMIT 5", (route_id,), fetch=True)
+        else:
+            rows = self._exec("SELECT ts, cause, effect, header_text, description_text FROM ttc_alerts "
+                              "WHERE route_id = %s ORDER BY ts DESC LIMIT 5", (route_id,), fetch=True)
+        out, seen = [], set()
+        for ts, cause, effect, header, desc in rows or []:
+            if now - ts > max_age_s:
+                continue
+            key = (cause, effect, header)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({"ts": ts, "cause": cause, "effect": effect, "header_text": header, "description_text": desc})
+        return out
 
     def insert_run(self, run_id: str, prompt: str, result: dict) -> None:
         payload = json.dumps(result, default=str)

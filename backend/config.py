@@ -51,6 +51,11 @@ def traffic_multiplier(hour: int) -> float:
         return 1.1
     return 1.0
 
+# On-time scoring for road/bus_est legs (backend/reliability.py), which have no stored delay history
+# (TomTom is never stored). A documented default: road travel time is modelled as roughly Normal with
+# this coefficient of variation, e.g. a 20 min leg has a ~4 min standard deviation. ESTIMATE, not measured.
+ONTIME_CV = 0.20
+
 # Door-to-door time includes the minutes a car trip spends finding a spot and walking from it. ESTIMATES
 # (no public live parking data); downtown is slower than elsewhere. Used by planner.py for drive and park & ride.
 PARKING_SEARCH_MIN = {"downtown": 8.0, "other": 3.0}
@@ -78,3 +83,28 @@ DOWNTOWN_BBOX =(43.630, 43.675, -79.420, -79.360)  # lat_min, lat_max, lon_min, 
 # Hamilton/Niagara/Waterloo/Simcoe -- chosen to comfortably include Oshawa, Milton, Newmarket and
 # Georgetown while excluding Hamilton-area and Barrie-area GO stations just south/north of those).
 GTA_BBOX = (43.30, 44.10, -80.05, -78.70)
+
+# TomTom Flow Segment Data (backend/tomtom.py): never stored (TomTom's terms prohibit a derivative
+# database of their data; caching is allowed only for as long as their response headers permit), so
+# this is an in-memory-only, short-TTL read of "how much slower than free-flow are the roads right now."
+# TomTom's own docs are inconsistent about the free daily/monthly figure for this endpoint (a tiles
+# quota of 200K/month is unrelated; the non-tile Traffic API quota reads as low as 2.5K/month in some
+# places). TOMTOM_DAILY_CAP is set well under the strictest plausible reading (2,500/month ~ 83/day)
+# rather than trusting the more generous numbers; raise it only after confirming the plan's real quota.
+TOMTOM_DAILY_CAP = 60
+TOMTOM_CACHE_TTL_S = 300  # one fetch covers every trip planned in this window
+# A handful of fixed points on downtown corridors (Gardiner, DVP, University, King, Bloor, Spadina,
+# Richmond, Front, Jarvis, Lake Shore), used to build one shared "roads are X times slower than usual
+# right now" ratio for every bot's road and surface-transit legs. Not meant to resolve to a specific leg.
+TOMTOM_CORRIDOR_POINTS = [
+    (43.6379, -79.3936),  # Gardiner Expressway at Spadina
+    (43.6629, -79.3615),  # Don Valley Parkway at Bloor
+    (43.6548, -79.3883),  # University Ave at Dundas
+    (43.6465, -79.3863),  # King St W at University
+    (43.6677, -79.3948),  # Bloor St W at Bathurst
+    (43.6366, -79.3977),  # Spadina Ave at Front
+    (43.6505, -79.3828),  # Richmond St W at Yonge
+    (43.6420, -79.3790),  # Front St E at Jarvis
+    (43.6555, -79.3626),  # Jarvis St at Carlton
+    (43.6355, -79.3794),  # Lake Shore Blvd at Yonge
+]
