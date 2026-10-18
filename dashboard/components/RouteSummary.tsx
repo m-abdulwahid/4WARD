@@ -14,13 +14,11 @@ type Bot = { key: string; name: string; color: string };
 export default function RouteSummary({
   bot,
   route,
-  deadlineNote,
   onBack,
   onChange,
 }: {
   bot: Bot;
   route: Candidate;
-  deadlineNote?: string | null;
   onBack: () => void;
   onChange: () => void;
 }) {
@@ -103,7 +101,6 @@ export default function RouteSummary({
       </dl>
       <p className="mt-1 text-[11px] text-zinc-500">
         {route.depart} to {route.arrive}
-        {deadlineNote ? ` · ${deadlineNote}` : route.meets_deadline !== undefined && (route.meets_deadline ? " · makes your deadline" : ` · misses your deadline (leave by ${route.leave_by})`)}
       </p>
 
       {legs && (

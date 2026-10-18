@@ -12,6 +12,7 @@ import RouteChips from "@/components/RouteChips";
 import LayerToggles from "@/components/LayerToggles";
 import MapLegend, { LegendBotStatus } from "@/components/MapLegend";
 import TripOptions, { Priority } from "@/components/TripOptions";
+import { TripConstraints, clock, fitRoutes } from "@/lib/routeFit";
 import ExampleTrips from "@/components/ExampleTrips";
 import { TimeKind, parseTime, writeTimeToPrompt } from "@/lib/timeParse";
 
@@ -301,14 +302,26 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prompt, patch]);
 
-  const done = BOTS.filter((b) => bots[b.key].route);
+  // Routes that fit the trip (deadline, budget, bags, car/bike). Everything below (map, chips, legend, Routes list,
+  // timelapse, priority pick) uses this, so a route that breaks a constraint is left out everywhere.
+  const fit = useMemo(
+    () =>
+      fitRoutes(
+        BOTS.filter((b) => bots[b.key].route).map((b) => ({ key: b.key, route: bots[b.key].route as Candidate })),
+        (parsed?.constraints ?? {}) as TripConstraints,
+        budget,
+        !deadlineNote, // a deadline tomorrow cannot be judged against today's clock
+      ),
+    [bots, parsed, budget, deadlineNote],
+  );
+  const done = BOTS.filter((b) => bots[b.key].route && fit.shown.includes(b.key));
   const [hoverBot, setHoverBot] = useState<BotKey | null>(null); // chip under the pointer (or focused)
   const highlight = (hoverBot && !hiddenBots[hoverBot] ? hoverBot : null) ?? focus ?? (showAll ? null : chosen);
 
   // When the run finishes, open the route that best matches the user's priority (engine numbers only).
   useEffect(() => {
     if (running || !priority || focus || chosen) return;
-    const ready = BOTS.filter((b) => bots[b.key].route);
+    const ready = done;
     if (!ready.length) return;
     const by = (f: (r: Candidate) => number) => ready.reduce((a, b) => (f(bots[b.key].route!) < f(bots[a.key].route!) ? b : a)).key;
     const pick: BotKey =
@@ -323,7 +336,7 @@ export default function Home() {
   routeViewRef.current = routeView;
   const mapRoutes = useMemo(
     () =>
-      BOTS.filter((b) => bots[b.key].route && (!routeView || b.key === routeView)).map((b) => ({
+      BOTS.filter((b) => bots[b.key].route && fit.shown.includes(b.key) && (!routeView || b.key === routeView)).map((b) => ({
         id: b.key,
         color: b.color,
         label: b.name,
@@ -331,7 +344,7 @@ export default function Home() {
         emphasized: routeView ? true : highlight ? highlight === b.key : true,
         visible: routeView ? true : !hiddenBots[b.key],
       })),
-    [bots, highlight, hiddenBots, routeView],
+    [bots, highlight, hiddenBots, routeView, fit],
   );
   // Modes the finished routes use, with the colour each is drawn in (TTC line colour for transit).
   const usedModes = useMemo(() => {
@@ -384,7 +397,15 @@ export default function Home() {
   const legendStatus = Object.fromEntries(
     BOTS.map((b) => {
       const s = bots[b.key];
-      const state = s.route ? "done" : s.status === "FAILED" ? "failed" : running || s.status === "SCANNING" || s.status === "ROUTING" ? "searching" : "waiting";
+      const state = s.route
+        ? fit.excluded.includes(b.key)
+          ? "excluded"
+          : "done"
+        : s.status === "FAILED"
+          ? "failed"
+          : running || s.status === "SCANNING" || s.status === "ROUTING"
+            ? "searching"
+            : "waiting";
       return [b.key, { state, error: s.error }];
     }),
   ) as Record<BotKey, LegendBotStatus>;
@@ -486,7 +507,7 @@ export default function Home() {
         >
           <div className="w-max">
             <RouteChips
-              found={{ cheap: !!bots.cheap.route, fastest: !!bots.fastest.route, green: !!bots.green.route, best: !!bots.best.route }}
+              found={{ cheap: done.some((b) => b.key === "cheap"), fastest: done.some((b) => b.key === "fastest"), green: done.some((b) => b.key === "green"), best: done.some((b) => b.key === "best") }}
               hidden={hiddenBots}
               onToggle={toggleBot}
               onShowAll={showEveryRoute}
@@ -513,7 +534,6 @@ export default function Home() {
           <RouteSummary
             bot={BOTS.find((b) => b.key === routeView)!}
             route={bots[routeView].route!}
-            deadlineNote={deadlineNote}
             onBack={() => backToAllRoutes(false)}
             onChange={() => backToAllRoutes(true)}
           />
@@ -826,14 +846,27 @@ export default function Home() {
                 Watch the trip unfold
               </button>
             )}
-            {BOTS.map((b) => (
+            {fit.fallback && (
+              <p role="status" data-testid="fit-notice" className="rounded-xl bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900 ring-1 ring-amber-200">
+                {fit.fallback.kind === "deadline"
+                  ? `No route arrives by ${clock(fit.fallback.arriveBy)}. Closest options shown.`
+                  : `No route fits your $${fit.fallback.budget.toFixed(2)} budget. Cheapest option shown.`}
+              </p>
+            )}
+            {[...BOTS]
+              .filter((b) => !fit.excluded.includes(b.key))
+              .sort((a, b) => {
+                const ia = fit.shown.indexOf(a.key);
+                const ib = fit.shown.indexOf(b.key);
+                return fit.fallback?.kind === "deadline" && ia >= 0 && ib >= 0 ? ia - ib : 0; // earliest arrival first
+              })
+              .map((b) => (
               <RouteCard
                 key={b.key}
                 bot={b}
                 state={bots[b.key]}
                 running={running}
-                budget={budget}
-                deadlineNote={deadlineNote}
+                arrival={fit.fallback?.kind === "deadline"}
                 focused={focus === b.key}
                 chosen={chosen === b.key}
                 onFocus={() => {
@@ -846,11 +879,13 @@ export default function Home() {
                   setShowAll(false);
                   setRouteView(b.key);
                 }}
-                onUseAlternative={(alt) => patch(b.key, { route: alt })}
               />
             ))}
-            <p className="text-[11px] leading-relaxed text-zinc-500">
-              Numbers come from the routing engine, not the AI. Transit fares follow TTC rules; driving, parking, rideshare costs and traffic are estimated. Transit schedule data is from TTC GTFS.
+            <p
+              className="text-[11px] text-zinc-500"
+              title="Numbers come from the routing engine, not the AI. Transit fares follow TTC and GO rules; driving, parking, rideshare costs and traffic are estimated."
+            >
+              Estimates
             </p>
           </div>
           <div className="shrink-0 border-t border-zinc-100 px-4 py-3 md:px-5">

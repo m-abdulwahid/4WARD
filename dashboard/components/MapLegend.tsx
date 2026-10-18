@@ -16,7 +16,7 @@ function Pin({ letter }: { letter: string }) {
  * What the map shows. Lines are coloured by transport mode; small labels on the map say which bot found each route.
  * Open on laptops, collapsed behind a button on phones.
  */
-export type LegendBotStatus = { state: "waiting" | "searching" | "done" | "failed"; error?: string | null };
+export type LegendBotStatus = { state: "waiting" | "searching" | "done" | "failed" | "excluded"; error?: string | null };
 
 export default function MapLegend({
   status,
@@ -89,7 +89,7 @@ export default function MapLegend({
                   <span aria-hidden className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: b.color, opacity: st.state === "done" && shown ? 1 : 0.4 }} />
                   <span className={`min-w-0 truncate ${highlight === b.key ? "font-semibold text-zinc-900" : st.state === "done" && shown ? "" : "text-zinc-400"}`}>{b.name}</span>
                   <span className={`ml-auto shrink-0 text-[10px] ${st.state === "failed" ? "text-red-700" : "text-zinc-500"}`} title={st.state === "failed" ? st.error ?? undefined : undefined}>
-                    {highlight === b.key ? "selected" : !shown && st.state === "done" ? "hidden" : { waiting: "", searching: "searching…", done: "", failed: "failed, no route" }[st.state]}
+                    {highlight === b.key ? "selected" : !shown && st.state === "done" ? "hidden" : { waiting: "", searching: "searching…", done: "", failed: "failed, no route", excluded: "doesn't fit trip" }[st.state]}
                   </span>
                 </li>
               );
