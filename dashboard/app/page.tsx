@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
-import { API, Candidate, apiHeaders, runWebSocketUrl } from "@/lib/api";
+import { API, Candidate, TripPoint, apiHeaders, runWebSocketUrl } from "@/lib/api";
 import { BOTS, BotKey, BotState, blankBots, groupByRoute } from "@/lib/bots";
 import InsightsPanel from "@/components/InsightsPanel";
 import LivePanel from "@/components/LivePanel";
@@ -120,7 +120,8 @@ export default function Home() {
   const [places, setPlaces] = useState<{ origin: Place; destination: Place } | null>(null);
   const [bots, setBots] = useState<Record<BotKey, BotState>>(blankBots);
   const [running, setRunning] = useState(false);
-  const [parsed, setParsed] = useState<{ origin: string; destination: string; parser?: string; constraints?: Record<string, unknown> } | null>(null);
+  const [parsed, setParsed] = useState<{ origin: string; destination: string; stops?: { name: string; type: string; dwell_min: number }[]; optimize_order?: boolean; parser?: string; constraints?: Record<string, unknown> } | null>(null);
+  const [points, setPoints] = useState<TripPoint[]>([]); // A, B, C ... in visiting order, from the run's first event
   const [error, setError] = useState("");
   const [focus, setFocus] = useState<BotKey | null>(null);
   const [chosen, setChosen] = useState<BotKey | null>(null);
@@ -230,6 +231,7 @@ export default function Home() {
     setChosen(null);
     setFocus(null);
     setParsed(null);
+    setPoints([]);
     setPlaces(null);
     setUnseen(0);
     setShowAll(false);
@@ -264,6 +266,7 @@ export default function Home() {
           setParsed(ev);
           if (ev.origin && ev.destination) checkPlaces(ev.origin, ev.destination);
         }
+        else if (ev.type === "points") setPoints(ev.points ?? []);
         else if (ev.type === "frame") patch(k, { frame: ev.data });
         else if (ev.type === "steel_session") patch(k, { liveViewUrl: ev.live_view_url });
         else if (ev.type === "status") patch(k, { status: ev.status });
@@ -356,6 +359,7 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bots, routeView]);
   const first = done[0] ? bots[done[0].key].route : null;
+  const waypoints = useMemo(() => points.slice(1, -1).map((p) => ({ lat: p.lat, lon: p.lon, name: p.name })), [points]);
   const [timelapseOpen, setTimelapseOpen] = useState(false);
   const timelapseRoutes = useMemo(
     () => routeGroups.map((g) => ({ key: g[0].key, name: g.map((b) => b.name).join(" + "), color: g[0].color, candidate: bots[g[0].key].route as Candidate })),
@@ -430,6 +434,7 @@ export default function Home() {
           routes={mapRoutes}
           origin={first ? first.legs[0]?.from : null}
           destination={first ? first.legs[first.legs.length - 1]?.to : null}
+          waypoints={waypoints}
           padding={mapPadding}
           colorBy="mode"
           lineScale={routeView ? 1.6 : 1}
@@ -747,7 +752,17 @@ export default function Home() {
           <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 pb-3 md:px-5">
             {parsed?.origin && parsed.destination && (
               <p className="rounded-xl bg-zinc-50 p-3 text-xs text-zinc-600" data-testid="parsed-summary">
-                Understood ({parsed.parser}): <b className="text-zinc-900">{parsed.origin}</b> to <b className="text-zinc-900">{parsed.destination}</b>
+                Understood ({parsed.parser}): <b className="text-zinc-900">{parsed.origin}</b>
+                {(parsed.stops ?? []).map((s) => (
+                  <span key={s.name}>
+                    {" "}
+                    then {s.type === "via" ? "via " : ""}
+                    <b className="text-zinc-900">{s.name}</b>
+                    {s.dwell_min > 0 ? ` (${Math.round(s.dwell_min)} min)` : ""}
+                  </span>
+                ))}{" "}
+                to <b className="text-zinc-900">{parsed.destination}</b>
+                {parsed.optimize_order ? " · any stop order" : (parsed.stops ?? []).length > 1 ? " · stops in the order you typed" : ""}
                 {parsed.constraints &&
                   ` · ${Object.entries(parsed.constraints)
                     .filter(([, v]) => v && v !== 0)

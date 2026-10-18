@@ -125,7 +125,7 @@ export default function MapLegend({
             <Pin letter="A" />
             <Pin letter="B" />
           </span>
-          Start and destination
+          Start (A), stops in the order typed, then destination
         </p>
       </div>
     </section>

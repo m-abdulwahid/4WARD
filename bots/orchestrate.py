@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 import httpx
 from playwright.async_api import async_playwright
 
-from backend import geo, planner
+from backend import geo, planner, trip
 
 from . import critic, optimize
 from .nlp import parse_prompt
@@ -69,23 +69,40 @@ async def _run_steel(keys, user, base_url, emit, max_steps, timeout_s, stream_fr
 async def _locate(user: dict) -> tuple[dict | None, str | None]:
     """Geocode both ends and apply the same GTA-only check the engine applies to every /route call, up front, so
     an unresolvable trip never spins up four browsers just to fail."""
-    places = {}
-    for label in ("origin", "destination"):
-        g = await geo.geocode(user[label])
+    places: dict = {"stops": []}
+    wanted = [("origin", user["origin"]), ("destination", user["destination"])] + \
+             [(f"stop {i + 1}", s["name"]) for i, s in enumerate(user.get("stops") or [])]
+    for label, query in wanted:
+        g = await geo.geocode(query)
         if not g:
-            return None, f"Could not find {label} ({user[label]!r}) in the GTA -- 4WARD only covers the Greater Toronto Area."
+            return None, f"Could not find {label} ({query!r}) in the GTA -- 4WARD only covers the Greater Toronto Area."
         if not geo.in_gta(g["lat"], g["lon"]):
-            return None, f"{label.capitalize()} ({user[label]!r}) is outside the GTA -- 4WARD only covers the Greater Toronto Area."
-        places[label] = g
+            return None, f"{label.capitalize()} ({query!r}) is outside the GTA -- 4WARD only covers the Greater Toronto Area."
+        if label.startswith("stop"):
+            places["stops"].append({**user["stops"][len(places["stops"])], "lat": g["lat"], "lon": g["lon"]})
+        else:
+            places[label] = g
     return places, None
 
 
+def trip_points(user: dict, places: dict) -> list[dict]:
+    """The ordered stops with their A, B, C... labels (as typed), for map markers and the stop list."""
+    seq = [("origin", places["origin"], {})] + [("stop", s, s) for s in places["stops"]] + [("destination", places["destination"], {})]
+    return [{"label": trip.LETTERS[i], "name": (user["origin"] if k == "origin" else user["destination"] if k == "destination" else p["name"]),
+             "lat": p["lat"], "lon": p["lon"], "type": k if k != "stop" else p.get("type", "stop"), "dwell_min": p.get("dwell_min", 0)}
+            for i, (k, p, _) in enumerate(seq)]
+
+
 async def shared_candidates(user: dict, places: dict) -> list[dict]:
-    """The trip's ONE candidate set: every mode, computed once, ranked by all four bots."""
+    """The trip's ONE candidate set: every mode, computed once, ranked by all four bots. With stops it is a set of
+    whole-trip candidates (backend/trip.py) shaped exactly like single-leg ones."""
     c = {k: v for k, v in user["constraints"].items() if k in UI_CONSTRAINTS and v is not None}
     constraints = planner.Constraints(modes=list(ALL_MODES), **c)
     o, d = places["origin"], places["destination"]
-    plan = await planner.plan((o["lat"], o["lon"]), (d["lat"], d["lon"]), constraints)
+    if places["stops"]:
+        plan = await trip.plan_trip(o, places["stops"], d, constraints, bool(user.get("optimize_order")))
+    else:
+        plan = await planner.plan((o["lat"], o["lon"]), (d["lat"], d["lon"]), constraints)
     return plan["candidates"]
 
 
@@ -95,7 +112,7 @@ def _summary(c: dict) -> dict:
 
 
 async def run_all(prompt: str, emit: Emit | None = None, base_url: str | None = None, keys: list[str] | None = None,
-                  stream_frames: bool = True, max_steps: int = 24, timeout_s: float = 120) -> dict:
+                  stream_frames: bool = True, max_steps: int = 40, timeout_s: float = 150) -> dict:
     base_url = base_url or os.environ.get("DASHBOARD_URL", "http://localhost:3000")
     t0 = time.time()
     user = await parse_prompt(prompt)
@@ -105,6 +122,7 @@ async def run_all(prompt: str, emit: Emit | None = None, base_url: str | None = 
     places, scope_error = await _locate(user)
     if scope_error:
         return {"error": scope_error, "parsed": user, "results": []}
+    await _emit(emit, {"type": "points", "points": trip_points(user, places)})
     # Pin the departure to one clock time so the engine's run and every bot's page compute identical times.
     if not user["constraints"].get("depart_at"):
         user["constraints"]["depart_at"] = datetime.now(TORONTO).strftime("%H:%M")
@@ -132,5 +150,5 @@ async def run_all(prompt: str, emit: Emit | None = None, base_url: str | None = 
         await _emit(emit, {"type": "invariant_violation", "violations": violations})
     _, relaxed = optimize.eligible(shared, user["constraints"])
     return {"parsed": user, "results": results, "elapsed_s": round(time.time() - t0, 1),
-            "candidates": [_summary(c) for c in shared], "relaxed": relaxed, "invariant_violations": violations,
-            "route_tags": optimize.tags(chosen)}
+            "points": trip_points(user, places), "candidates": [_summary(c) for c in shared], "relaxed": relaxed,
+            "invariant_violations": violations, "route_tags": optimize.tags(chosen)}

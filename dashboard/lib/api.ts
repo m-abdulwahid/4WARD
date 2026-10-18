@@ -26,7 +26,24 @@ export type Leg = {
   cost?: number;
   co2_kg?: number;
   color?: string;
+  cand_id?: string; // multi-stop: id of the single-leg option this leg came from (e.g. park_ride)
+  segment?: number; // multi-stop: which leg of the trip (A to B is 0, B to C is 1, ...) this leg belongs to
 };
+
+/** One row of a multi-stop schedule: when you reach a stop, how long you stay, and when you leave. */
+export type StopVisit = {
+  label: string; // A, B, C ...
+  name: string;
+  kind: string; // origin | stop | via | pickup | dropoff | errand | destination
+  arrive: string | null;
+  wait_min: number; // waiting for a time window to open
+  dwell_min: number;
+  depart: string | null;
+  window?: [string, string] | null;
+};
+
+export type StopType = "stop" | "via" | "pickup" | "dropoff" | "errand";
+export type StopInput = { name: string; type: StopType; dwell_min: number };
 
 export type Candidate = {
   id: string;
@@ -48,11 +65,16 @@ export type Candidate = {
   violates?: string[];
   reliability?: { reliability_pct: number; history_days: number; basis: string };
   pareto_optimal?: boolean;
+  schedule?: StopVisit[]; // multi-stop trips only
 };
+
+export type TripPoint = { label: string; name: string; lat: number; lon: number; type: string; dwell_min: number; window?: [string, string] | null };
 
 export type RouteResult = {
   origin_place: { name: string; lat: number; lon: number };
   destination_place: { name: string; lat: number; lon: number };
+  points?: TripPoint[]; // multi-stop trips: every point in visiting order, labelled A, B, C ...
+  optimize_order?: boolean;
   candidates: Candidate[];
   data_notes: string[];
   traffic_multiplier: number;
@@ -76,11 +98,23 @@ export type Constraints = {
 
 export const ALL_MODES = ["walk", "bike", "ebike", "bikeshare", "drive", "rideshare", "transit", "park_ride"] as const;
 
-export async function computeRoute(origin: string, destination: string, constraints: Constraints): Promise<RouteResult> {
+export async function computeRoute(
+  origin: string,
+  destination: string,
+  constraints: Constraints,
+  stops: StopInput[] = [],
+  optimizeOrder = false,
+): Promise<RouteResult> {
   const r = await fetch(`${API}/route`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ origin: { text: origin }, destination: { text: destination }, constraints }),
+    body: JSON.stringify({
+      origin: { text: origin },
+      destination: { text: destination },
+      stops: stops.filter((s) => s.name.trim()).map((s) => ({ name: s.name.trim(), type: s.type, dwell_min: s.dwell_min })),
+      optimize_order: optimizeOrder,
+      constraints,
+    }),
   });
   if (!r.ok) {
     const e = await r.json().catch(() => ({}));

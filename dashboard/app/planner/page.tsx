@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
-import { ALL_MODES, Candidate, Constraints, RouteResult, computeRoute, getAssumptions, suggest } from "@/lib/api";
+import { ALL_MODES, Candidate, Constraints, RouteResult, StopInput, StopType, computeRoute, getAssumptions, suggest } from "@/lib/api";
 
 const RouteMap = dynamic(() => import("@/components/RouteMap"), { ssr: false });
 
@@ -27,6 +27,14 @@ const COLORS: Record<string, string> = {
   transit_bus: "#7c3aed",
   park_ride: "#ea580c",
 };
+const STOP_TYPES: [StopType, string][] = [
+  ["stop", "Stop"],
+  ["via", "Via"],
+  ["pickup", "Pick up"],
+  ["dropoff", "Drop off"],
+  ["errand", "Errand"],
+];
+const LETTERS = "ABCDEFGHIJ";
 const TOGGLES: [keyof Constraints, string][] = [
   ["no_presto", "No Presto card"],
   ["has_car", "I have a car"],
@@ -116,7 +124,18 @@ export default function Planner() {
     arrive_by: "",
     park_ride_lot: null,
   });
+  const [stops, setStops] = useState<StopInput[]>([]);
+  const [optimizeOrder, setOptimizeOrder] = useState(false);
   const [lots, setLots] = useState<string[]>([]);
+  const updateStop = (i: number, patch: Partial<StopInput>) => setStops((s) => s.map((x, j) => (j === i ? { ...x, ...patch } : x)));
+  const moveStop = (i: number, by: number) =>
+    setStops((s) => {
+      const j = i + by;
+      if (j < 0 || j >= s.length) return s;
+      const next = [...s];
+      [next[i], next[j]] = [next[j], next[i]];
+      return next;
+    });
   useEffect(() => {
     getAssumptions().then((a) => setLots(a.park_ride_lots));
   }, []);
@@ -136,18 +155,18 @@ export default function Planner() {
         ...c,
         depart_at: c.depart_at || null,
         arrive_by: c.arrive_by || null,
-      });
+      }, stops, optimizeOrder);
       setResult(r);
       setState("done");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setState("error");
     }
-  }, [origin, destination, c]);
+  }, [origin, destination, c, stops, optimizeOrder]);
 
   useEffect(() => {
-    window.__4ward = { state, error, origin, destination, selected, confirmed, candidates: result?.candidates ?? [] };
-  }, [state, error, origin, destination, selected, confirmed, result]);
+    window.__4ward = { state, error, origin, destination, stops, selected, confirmed, candidates: result?.candidates ?? [] };
+  }, [state, error, origin, destination, stops, selected, confirmed, result]);
 
   const mapRoutes = useMemo(
     () =>
@@ -161,6 +180,7 @@ export default function Planner() {
         })),
     [result, selected],
   );
+  const waypoints = useMemo(() => (result?.points ?? []).slice(1, -1).map((p) => ({ lat: p.lat, lon: p.lon, name: p.name })), [result]);
   const toggleMode = (m: string) =>
     setC((p) => ({ ...p, modes: p.modes.includes(m) ? p.modes.filter((x) => x !== m) : [...p.modes, m] }));
 
@@ -173,8 +193,70 @@ export default function Planner() {
             Driven by: {BOT_BADGE[bot].name}
           </p>
         )}
-        <Place id="origin" label="From" value={origin} onChange={setOrigin} />
-        <Place id="destination" label="To" value={destination} onChange={setDestination} />
+        <Place id="origin" label="From (A)" value={origin} onChange={setOrigin} />
+        <section aria-label="Stops" className="flex flex-col gap-2" data-testid="stops">
+          {stops.map((s, i) => (
+            <div key={i} className="rounded-xl border border-zinc-200 p-2" data-testid={`stop-${i}`}>
+              <Place id={`stop-${i}`} label={`Stop ${LETTERS[i + 1]}`} value={s.name} onChange={(v) => updateStop(i, { name: v })} />
+              <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs">
+                <label className="flex items-center gap-1">
+                  Stay (min)
+                  <input
+                    data-testid={`stop-${i}-dwell`}
+                    type="number"
+                    min={0}
+                    max={600}
+                    value={s.dwell_min}
+                    disabled={s.type === "via"}
+                    onChange={(e) => updateStop(i, { dwell_min: Math.max(0, Number(e.target.value) || 0) })}
+                    className="w-16 rounded-lg border border-zinc-200 px-2 py-1 disabled:opacity-50"
+                  />
+                </label>
+                {STOP_TYPES.map(([t, label]) => (
+                  <button
+                    key={t}
+                    type="button"
+                    data-testid={`stop-${i}-type-${t}`}
+                    aria-pressed={s.type === t}
+                    onClick={() => updateStop(i, { type: t, ...(t === "via" ? { dwell_min: 0 } : {}) })}
+                    className={`rounded-full border px-2 py-0.5 ${s.type === t ? "border-zinc-900 bg-zinc-900 text-white" : "border-zinc-200 bg-white text-zinc-700"}`}
+                  >
+                    {label}
+                  </button>
+                ))}
+                <span className="ml-auto flex gap-1">
+                  <button type="button" data-testid={`stop-${i}-up`} aria-label={`Move stop ${LETTERS[i + 1]} earlier`} disabled={i === 0} onClick={() => moveStop(i, -1)} className="rounded border border-zinc-200 px-1.5 disabled:opacity-40">↑</button>
+                  <button type="button" data-testid={`stop-${i}-down`} aria-label={`Move stop ${LETTERS[i + 1]} later`} disabled={i === stops.length - 1} onClick={() => moveStop(i, 1)} className="rounded border border-zinc-200 px-1.5 disabled:opacity-40">↓</button>
+                  <button type="button" data-testid={`stop-${i}-remove`} aria-label={`Remove stop ${LETTERS[i + 1]}`} onClick={() => setStops((all) => all.filter((_, j) => j !== i))} className="rounded border border-zinc-200 px-1.5">✕</button>
+                </span>
+              </div>
+            </div>
+          ))}
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              data-testid="add-stop"
+              disabled={stops.length >= 6}
+              onClick={() => setStops((s) => [...s, { name: "", type: "stop", dwell_min: 0 }])}
+              className="rounded-full border border-zinc-300 px-3 py-1 text-xs font-medium text-zinc-800 disabled:opacity-50"
+            >
+              + Add a stop
+            </button>
+            {stops.length > 1 && (
+              <button
+                type="button"
+                data-testid="toggle-optimize_order"
+                aria-pressed={optimizeOrder}
+                onClick={() => setOptimizeOrder((v) => !v)}
+                title="Off by default: your stops are visited in the order you typed them. On: every order is tried (up to 3 stops)."
+                className={`rounded-full border px-3 py-1 text-xs ${optimizeOrder ? "border-zinc-900 bg-zinc-900 text-white" : "border-zinc-200 bg-white text-zinc-700"}`}
+              >
+                Let the planner reorder stops
+              </button>
+            )}
+          </div>
+        </section>
+        <Place id="destination" label={`To (${LETTERS[stops.length + 1]})`} value={destination} onChange={setDestination} />
 
         <fieldset>
           <legend className="text-xs font-medium text-zinc-600">Travel modes to consider</legend>
@@ -341,6 +423,18 @@ export default function Planner() {
                     {x.meets_deadline !== undefined &&
                       (x.meets_deadline ? " · makes your deadline" : ` · MISSES deadline (leave by ${x.leave_by})`)}
                   </p>
+                  {x.schedule && (
+                    <ol className="mt-1 text-xs text-zinc-700" data-testid={`schedule-${x.id}`}>
+                      {x.schedule.map((v) => (
+                        <li key={v.label}>
+                          <b>{v.label}</b> {v.name}: {v.arrive ? `arrive ${v.arrive}` : "start"}
+                          {v.wait_min > 0 ? `, wait ${Math.round(v.wait_min)} min` : ""}
+                          {v.dwell_min > 0 ? `, stay ${Math.round(v.dwell_min)} min` : ""}
+                          {v.depart ? `, leave ${v.depart}` : ""}
+                        </li>
+                      ))}
+                    </ol>
+                  )}
                   {x.notes?.map((n) => (
                     <p key={n} className="text-xs text-zinc-500">
                       • {n}
@@ -371,6 +465,7 @@ export default function Planner() {
           routes={mapRoutes}
           origin={result ? [result.origin_place.lat, result.origin_place.lon] : null}
           destination={result ? [result.destination_place.lat, result.destination_place.lon] : null}
+          waypoints={waypoints}
         />
       </main>
     </div>

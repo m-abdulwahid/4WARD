@@ -64,6 +64,8 @@ const OSM_FALLBACK: maplibregl.StyleSpecification = {
   ],
 };
 const NO_PAD: MapPadding = { top: 60, right: 60, bottom: 60, left: 60 };
+export type Waypoint = { lat: number; lon: number; name: string };
+const NO_WAYPOINTS: Waypoint[] = []; // stable identity: a fresh [] default would redraw the map on every render
 
 /**
  * Home map: every leg in its transport mode's style. All found routes are drawn at once. Routes that share a street
@@ -164,6 +166,7 @@ export default function RouteMap({
   routes,
   origin,
   destination,
+  waypoints = NO_WAYPOINTS,
   padding = NO_PAD,
   showTtc = false,
   bikeStations = null,
@@ -176,6 +179,7 @@ export default function RouteMap({
   routes: MapRoute[];
   origin?: [number, number] | null; // [lat, lon]
   destination?: [number, number] | null;
+  waypoints?: Waypoint[]; // intermediate stops in visiting order, drawn as B, C, ... between A and the destination
   padding?: MapPadding; // space covered by floating panels, so routes are fitted into the visible part
   showTtc?: boolean; // TTC subway/streetcar lines from /ttc-lines.geojson
   bikeStations?: BikeStation[] | null; // null hides the Bike Share layer
@@ -366,17 +370,20 @@ export default function RouteMap({
         markers.current.push(new maplibregl.Marker({ element: e }).setLngLat([ll[1], ll[0]]).addTo(m));
         bounds.extend([ll[1], ll[0]]);
       };
-      mk(origin, "#18181b", "Start", "A");
-      mk(destination, "#18181b", "Destination", "B");
+      // Letters follow the order typed: A = start, then each stop, then the destination.
+      const letter = (i: number) => String.fromCharCode(65 + i);
+      mk(origin, "#18181b", "Start (A)", "A");
+      waypoints.forEach((w, i) => mk([w.lat, w.lon], "#3f3f46", `Stop ${letter(i + 1)}: ${w.name}`, letter(i + 1)));
+      mk(destination, "#18181b", `Destination (${letter(waypoints.length + 1)})`, letter(waypoints.length + 1));
       // refit when the set of shown routes or the endpoints change, not when one is highlighted
-      const sig = JSON.stringify([routes.filter((r) => r.visible !== false).map((r) => r.id), origin, destination, fitKey]);
+      const sig = JSON.stringify([routes.filter((r) => r.visible !== false).map((r) => r.id), origin, destination, waypoints, fitKey]);
       if (!bounds.isEmpty() && sig !== fitted.current) {
         fitted.current = sig;
         m.fitBounds(bounds, { padding: pad.current, duration: 500, maxZoom: 15 });
       }
     };
     if (ready.current) draw();
-  }, [routes, origin, destination, colorBy, styleGen, lineScale, fitKey]);
+  }, [routes, origin, destination, waypoints, colorBy, styleGen, lineScale, fitKey]);
 
   // Timelapse vehicle markers: moved every frame via setLngLat (cheap), never recreated, so motion is
   // smooth. The element itself is only rebuilt when a vehicle's mode changes (it switched legs).

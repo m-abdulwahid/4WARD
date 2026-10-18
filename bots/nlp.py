@@ -25,8 +25,78 @@ def _clock(h: str, m: str | None, ap: str | None) -> str:
     return f"{hh:02d}:{int(m or 0):02d}"
 
 
-def parse_rules(text: str) -> dict:
-    t = text.strip()
+# Stop phrases. Phase 4 adds the full vocabulary (dropped off, picked up, park at, meet at a time...); these cover the
+# multi-stop basics: a waypoint with an optional dwell time ("stop at X for 20 minutes"), and a pass-through ("via X").
+_PLACE = r"(?:the\s+)?(?P<place>[A-Za-z0-9'’.&\- ]+?)(?=\s+(?:for|by|before|with|and\s+(?:then|stop|swing|pick|drop|via|errands?|go|i|we)|then|at|arriving|using|but|because|while|please|thanks|to|from)\b|[,.;]|$)"
+_DWELL = r"(?:\s+for\s+(?:about\s+|around\s+)?(?P<n>\d+(?:\.\d+)?|an?|half an?)\s*(?P<u>minutes?|mins?|hours?|hrs?)\b)?"
+_STOP_KINDS = [
+    (r"stops?(?:ping)?\s+(?:in\s+)?(?:at|by)", "stop"),
+    (r"swing(?:ing)?\s+by", "stop"),
+    (r"go(?:ing)?\s+by", "stop"),
+    (r"errands?\s+(?:at|in)", "errand"),
+    (r"pick(?:ing)?\s+(?:up\s+(?:[a-z]+\s+){0,3}?|(?:[a-z]+\s+){0,3}?up\s+)at", "pickup"),
+    (r"drop(?:ping)?\s+(?:off\s+(?:[a-z]+\s+){0,3}?|(?:[a-z]+\s+){0,3}?off\s+)at", "dropoff"),
+    (r"via", "via"),
+    (r"through", "via"),
+]
+_OPTIMIZE = re.compile(r"\b(?:in\s+(?:any|whatever|the\s+best)\s+order|(?:best|optimal|most\s+efficient|any)\s+order|re-?order\s+(?:my\s+|the\s+)?stops|optimi[sz]e\s+(?:the\s+)?order)\b", re.I)
+
+
+def _dwell_minutes(n: str | None, unit: str | None) -> float:
+    if not n or not unit:
+        return 0.0
+    v = 0.5 if n.lower().startswith("half") else 1.0 if n.lower() in ("a", "an") else float(n)
+    return v * (60 if unit.lower().startswith(("h")) else 1)
+
+
+def _clean_place(s: str) -> str:
+    s = re.sub(r"^(?:then\s+|go\s+to\s+|head\s+to\s+|going\s+to\s+|to\s+)+", "", s.strip(), flags=re.I)
+    return re.sub(r"^(?:the|my)\s+", "", s.strip(" ,.;"), flags=re.I)
+
+
+def _extract_stops(t: str) -> tuple[str, list[dict], bool, tuple[str, str] | None]:
+    """-> (text with stop phrases removed, ordered stops, optimize_order, (origin, destination) when the trip was
+    written as a chain such as "A to B to C" or "A, then B, then C")."""
+    optimize = bool(_OPTIMIZE.search(t))
+    found: list[tuple[int, dict]] = []
+    spans: list[tuple[int, int]] = []
+    for kw, kind in _STOP_KINDS:
+        for m in re.finditer(r"(?:\b(?:and|with|including)\s+)?(?:\ba\s+)?\b(?:" + kw + r")\s+" + _PLACE + _DWELL, t, re.I):
+            if any(a < m.end() and m.start() < b for a, b in spans):
+                continue
+            name = _clean_place(m.group("place"))
+            if not name:
+                continue
+            spans.append((m.start(), m.end()))
+            found.append((m.start(), {"name": name, "type": kind, "dwell_min": 0.0 if kind == "via" else _dwell_minutes(m.group("n"), m.group("u"))}))
+    core = t
+    for a, b in sorted(spans, reverse=True):
+        core = core[:a] + " " + core[b:]
+    core = re.sub(r"\s{2,}", " ", core).strip()
+    ends = None
+    parts = re.split(r"\s*,?\s*(?:and\s+)?\bthen\b\s*", core, flags=re.I)
+    if len(parts) >= 2 and all(0 < len(_clean_place(p).split()) <= 6 for p in parts[1:]):
+        first = parse_endpoints(parts[0])
+        tail = [_clean_place(p) for p in parts[1:]]
+        if first[0] and first[1]:
+            chain = [first[0], first[1]] + tail
+            ends = (chain[0], chain[-1])
+            for i, name in enumerate(chain[1:-1]):
+                found.append((t.lower().find(name.lower()) if name.lower() in t.lower() else 10_000 + i, {"name": name, "type": "stop", "dwell_min": 0.0}))
+            core = f"from {chain[0]} to {chain[-1]}"
+    elif not re.search(r"\b(?:from|need|want|get to|have to|must)\b", core, re.I):
+        segs = re.split(r"\s+(?:to|→|->)\s+", core)
+        segs = [re.sub(r"^(?:please\s+|route\s+|take me\s+)", "", s, flags=re.I).strip(" ,.;") for s in segs]
+        if len(segs) >= 3 and all(0 < len(s.split()) <= 5 for s in segs):
+            ends = (segs[0], segs[-1])
+            for i, name in enumerate(segs[1:-1]):
+                found.append((t.lower().find(name.lower()) if name.lower() in t.lower() else 10_000 + i, {"name": _clean_place(name), "type": "stop", "dwell_min": 0.0}))
+            core = f"from {segs[0]} to {segs[-1]}"
+    return core, [s for _, s in sorted(found, key=lambda x: x[0])], optimize, ends
+
+
+def parse_endpoints(t: str) -> tuple[str, str]:
+    """Origin and destination from text that contains no stop phrases."""
     low = t.lower()
     origin = destination = ""
     m = re.search(r"\bfrom\s+(.+?)\s+to\s+(.+?)" + STOP, t, re.I)
@@ -55,6 +125,15 @@ def parse_rules(text: str) -> dict:
                 a, b = b, a
             origin, destination = (t[low.find(x):low.find(x) + len(x)] for x in (a, b))  # keep the user's casing
     origin, destination = (re.sub(r"^(?:the|my)\s+", "", x, flags=re.I) for x in (origin, destination))
+    return origin, destination
+
+
+def parse_rules(text: str) -> dict:
+    full = text.strip()
+    low = full.lower()
+    core, stops, optimize, ends = _extract_stops(full)
+    origin, destination = ends if ends else parse_endpoints(core)
+    origin, destination = (re.sub(r"^(?:the|my)\s+", "", x, flags=re.I) for x in (origin, destination))
     c: dict = {"bags": 0, "no_presto": False, "has_car": False, "ev": False, "has_bike": False,
                "has_ebike": False, "avoid_stairs": False}
     m = re.search(r"\b(\d+|an?|one|two|three|four)\s+(?:big |large |heavy |carry-on )?(?:bags?|suitcases?|luggage)\b", low)
@@ -81,7 +160,8 @@ def parse_rules(text: str) -> dict:
     m = re.search(r"\b(?:leave|leaving|depart(?:ing)?|starting)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b", low)
     if m:
         c["depart_at"] = _clock(m.group(1), m.group(2), m.group(3))
-    return {"origin": origin, "destination": destination, "constraints": c, "parser": "rules"}
+    return {"origin": origin, "destination": destination, "stops": stops, "optimize_order": optimize,
+            "constraints": c, "parser": "rules"}
 
 
 async def parse_prompt(text: str) -> dict:
@@ -98,7 +178,11 @@ async def parse_prompt(text: str) -> dict:
             "Extract a Toronto trip request as JSON with keys: origin (string place name), destination (string), "
             "bags (int), no_presto (bool: user lacks a Presto card/pass), has_car, ev (car is electric), has_bike, "
             "has_ebike, avoid_stairs (bools), arrive_by and depart_at (24h HH:MM or null), stay_hours (number or null), "
-            "max_walk_m (int or null). Only set facts the user stated."
+            "max_walk_m (int or null), optimize_order (bool: true ONLY if the user explicitly says the stop order does not matter or "
+            "asks you to pick the best order; otherwise false), and stops: the places the user wants to visit BETWEEN origin and "
+            "destination, in exactly the order they were mentioned, each {name (string place name), type (one of stop, via, pickup, "
+            "dropoff, errand), dwell_min (number of minutes spent there, 0 if not said; 0 for via)}. Use an empty list when there "
+            "are no intermediate stops. Do not add the origin or destination to stops. Only set facts the user stated."
         )
         resp = await client.aio.models.generate_content(
             model=os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"),
@@ -106,7 +190,11 @@ async def parse_prompt(text: str) -> dict:
             config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0),
         )
         d = json.loads(resp.text)
+        stops = [{"name": str(s["name"]).strip(), "type": s.get("type") if s.get("type") in ("stop", "via", "pickup", "dropoff", "errand") else "stop",
+                  "dwell_min": 0.0 if s.get("type") == "via" else max(0.0, float(s.get("dwell_min") or 0))}
+                 for s in (d.get("stops") if isinstance(d.get("stops"), list) else rules["stops"]) if isinstance(s, dict) and s.get("name")]
         out = {"origin": d.get("origin") or rules["origin"], "destination": d.get("destination") or rules["destination"],
+               "stops": stops, "optimize_order": bool(d.get("optimize_order", rules["optimize_order"])),
                "constraints": {k: d[k] for k in ("bags", "no_presto", "has_car", "ev", "has_bike", "has_ebike", "avoid_stairs",
                                                   "arrive_by", "depart_at", "stay_hours", "max_walk_m") if d.get(k) is not None},
                "parser": "gemini"}

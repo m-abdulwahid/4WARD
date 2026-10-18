@@ -13,7 +13,7 @@ from pydantic import BaseModel
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
-from . import bikeshare, geo, ingest, planner, runs  # noqa: E402
+from . import bikeshare, geo, ingest, planner, runs, trip  # noqa: E402
 from .db import Store, store  # noqa: E402
 from .config import ASSUMPTIONS, EMISSIONS_G_PER_KM, SPEEDS_KMH  # noqa: E402
 from .security import BotTokenMiddleware, RateLimitMiddleware, cors_origins  # noqa: E402
@@ -62,6 +62,8 @@ class Place(BaseModel):
 class RouteRequest(BaseModel):
     origin: Place
     destination: Place
+    stops: list[trip.Stop] = []  # in the order typed; visited in that order unless optimize_order
+    optimize_order: bool = False
     constraints: planner.Constraints = planner.Constraints()
 
 
@@ -114,10 +116,20 @@ async def bikeshare_stations():
 @app.post("/route")
 async def route(req: RouteRequest):
     o, d = await resolve(req.origin), await resolve(req.destination)
-    for n, p in (("origin", o), ("destination", d)):
+    resolved = []
+    for s in req.stops:
+        g = await resolve(Place(text=s.name, lat=s.lat, lon=s.lon))
+        resolved.append({**s.model_dump(), "name": s.name, "lat": g["lat"], "lon": g["lon"]})
+    for n, p in [("origin", o), ("destination", d)] + [(f"stop '{s['name']}'", s) for s in resolved]:
         if not geo.in_gta(p["lat"], p["lon"]):
             raise HTTPException(422, f"{n} is outside the GTA")
-    result = await planner.plan((o["lat"], o["lon"]), (d["lat"], d["lon"]), req.constraints)
+    if resolved:
+        try:
+            result = await trip.plan_trip(o, resolved, d, req.constraints, req.optimize_order)
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+    else:
+        result = await planner.plan((o["lat"], o["lon"]), (d["lat"], d["lon"]), req.constraints)
     result["origin_place"], result["destination_place"] = o, d
     return result
 

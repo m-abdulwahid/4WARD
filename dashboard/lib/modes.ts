@@ -60,10 +60,12 @@ export function legMode(leg: Leg, candidateId: string): ModeKey {
       return "bus";
     case "go_train":
       return "go_train";
-    case "car":
-      if (candidateId.startsWith("rideshare") || /rideshare|taxi/i.test(leg.label)) return "rideshare";
-      if (candidateId.startsWith("park_ride")) return "park_ride";
+    case "car": {
+      const id = leg.cand_id ?? candidateId; // multi-stop legs carry the id of the single-leg option they came from
+      if (id.startsWith("rideshare") || /rideshare|taxi/i.test(leg.label)) return "rideshare";
+      if (id.startsWith("park_ride")) return "park_ride";
       return "car";
+    }
     default:
       return "car";
   }

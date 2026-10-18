@@ -14,7 +14,7 @@ async def _run(monkeypatch, shared, bot_routes, keys=None):
         return {"origin": "A", "destination": "B", "constraints": {"bags": 0}, "parser": "rules"}
 
     async def locate(_):
-        return {"origin": {"lat": 43.7, "lon": -79.4}, "destination": {"lat": 43.65, "lon": -79.38}}, None
+        return {"origin": {"lat": 43.7, "lon": -79.4}, "destination": {"lat": 43.65, "lon": -79.38}, "stops": []}, None
 
     async def fake_shared(*_):
         return shared

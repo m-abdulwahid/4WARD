@@ -124,6 +124,42 @@ def test_rule_brain_never_reruns_or_explores_alternate_settings():
     assert a["testid"] == "select-route-rail"
 
 
+def _setup_page(controls):
+    return {**PAGE, "controls": [{"testid": "origin-input", "value": "A"}, {"testid": "destination-input", "value": "D"},
+                                 {"testid": "add-stop"}, {"testid": "compute-route"}] + controls}
+
+
+def test_rule_brain_builds_the_stop_list_in_order_before_computing():
+    user = {"origin": "A", "destination": "D", "constraints": {}, "optimize_order": False,
+            "stops": [{"name": "Eaton Centre", "type": "stop", "dwell_min": 20}, {"name": "High Park", "type": "via", "dwell_min": 0}]}
+    brain = RuleBrain("cheap", user)
+    assert brain.next_action(_setup_page([]), [])["testid"] == "add-stop"                       # no stop rows yet
+    row = lambda i, name="", pressed="false", dwell="0": [
+        {"testid": f"stop-{i}-input", "value": name}, {"testid": f"stop-{i}-dwell", "value": dwell}, {"testid": f"stop-{i}-type-stop", "pressed": pressed}]
+    assert brain.next_action(_setup_page(row(0)), [])["testid"] == "add-stop"                    # rows first: 1 of 2 present
+    two_empty = row(0) + [{"testid": "stop-1-input", "value": ""}]
+    assert brain.next_action(_setup_page(two_empty), []) == {"action": "type", "testid": "stop-0-input", "text": "Eaton Centre", "reason": "enter stop 1"}
+    named = row(0, "Eaton Centre") + [{"testid": "stop-1-input", "value": ""}]
+    assert brain.next_action(_setup_page(named), [])["testid"] == "stop-0-type-stop"             # then its type
+    typed = row(0, "Eaton Centre", "true") + [{"testid": "stop-1-input", "value": ""}]
+    a = brain.next_action(_setup_page(typed), [])
+    assert (a["testid"], a["text"]) == ("stop-0-dwell", "20")                                    # then its stay
+    done0 = row(0, "Eaton Centre", "true", "20") + [{"testid": "stop-1-input", "value": ""}]
+    assert brain.next_action(_setup_page(done0), [])["testid"] == "stop-1-input"                # then on to the second stop
+
+
+def test_rule_brain_removes_surplus_stops_and_sets_the_reorder_flag():
+    user = {"origin": "A", "destination": "D", "constraints": {}, "stops": [], "optimize_order": False}
+    page = _setup_page([{"testid": "stop-0-input", "value": "x"}])
+    assert RuleBrain("cheap", user).next_action(page, [])["testid"] == "stop-0-remove"
+    user2 = {"origin": "A", "destination": "D", "constraints": {}, "optimize_order": True,
+             "stops": [{"name": "B", "type": "stop", "dwell_min": 0}, {"name": "C", "type": "stop", "dwell_min": 0}]}
+    rows = [{"testid": f"stop-{i}-input", "value": n} for i, n in enumerate("BC")] + \
+           [{"testid": f"stop-{i}-type-stop", "pressed": "true"} for i in range(2)] + \
+           [{"testid": f"stop-{i}-dwell", "value": "0"} for i in range(2)] + [{"testid": "toggle-optimize_order", "pressed": "false"}]
+    assert RuleBrain("cheap", user2).next_action(_setup_page(rows), [])["testid"] == "toggle-optimize_order"
+
+
 def test_critic_flags_deadline_and_walk_and_bags():
     assert critic.flags_for(None, {}) == []
     missed = {"meets_deadline": False, "arrive": "17:42", "violates": [], "bag_friendliness": 1.0}

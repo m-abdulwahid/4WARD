@@ -10,6 +10,7 @@ the orchestrator computed for the trip. The brains only operate the UI and then 
 import asyncio
 import json
 import os
+import re
 from typing import Literal
 
 from pydantic import BaseModel
@@ -19,6 +20,7 @@ from .profiles import PROFILES, modes_for
 
 ALL_MODES = ["walk", "bike", "ebike", "bikeshare", "drive", "rideshare", "transit", "park_ride"]
 FLAGS = ["no_presto", "has_car", "ev", "has_bike", "has_ebike", "avoid_stairs"]
+MAX_GEMINI_CALLS = 3  # setup plans per bot; a trip with many stops may need more than one batch
 
 
 class Action(BaseModel):
@@ -73,6 +75,30 @@ class RuleBrain:
     def pool(self, page: dict) -> list[dict]:
         return self.shared if self.shared else page["candidates"]
 
+    def _stops_step(self, page: dict) -> dict | None:
+        """One action that brings the page's stop list (names, stay, type, order, reorder flag) in line with the trip."""
+        want = self.user.get("stops") or []
+        have = sorted(int(m.group(1)) for c in page["controls"] if (m := re.fullmatch(r"stop-(\d+)-input", c["testid"])))
+        if len(have) < len(want) and _control(page, "add-stop"):
+            return {"action": "click", "testid": "add-stop", "reason": f"add stop {len(have) + 1} of {len(want)}"}
+        if len(have) > len(want):
+            return {"action": "click", "testid": f"stop-{have[-1]}-remove", "reason": "remove a stop that is not in the trip"}
+        for i, s in enumerate(want):
+            name_ctl = _control(page, f"stop-{i}-input")
+            if name_ctl is not None and name_ctl.get("value") != s["name"]:
+                return {"action": "type", "testid": f"stop-{i}-input", "text": s["name"], "reason": f"enter stop {i + 1}"}
+            kind = s.get("type", "stop")
+            if (ctl := _control(page, f"stop-{i}-type-{kind}")) is not None and ctl.get("pressed") != "true":
+                return {"action": "click", "testid": f"stop-{i}-type-{kind}", "reason": f"stop {i + 1} is a {kind}"}
+            dwell = s.get("dwell_min") or 0
+            want_dwell = str(int(dwell)) if float(dwell).is_integer() else str(dwell)
+            if (ctl := _control(page, f"stop-{i}-dwell")) is not None and kind != "via" and (ctl.get("value") or "0") != want_dwell:
+                return {"action": "type", "testid": f"stop-{i}-dwell", "text": want_dwell, "reason": f"stay {want_dwell} min at stop {i + 1}"}
+        opt = _control(page, "toggle-optimize_order")
+        if opt is not None and (opt.get("pressed") == "true") != bool(self.user.get("optimize_order")):
+            return {"action": "click", "testid": "toggle-optimize_order", "reason": "set whether the planner may reorder stops"}
+        return None
+
     def next_action(self, page: dict, history: list[dict]) -> dict:
         u, c = self.user, self.user["constraints"]
         if page["state"] == "idle":
@@ -80,6 +106,9 @@ class RuleBrain:
                 ctl = _control(page, tid)
                 if ctl and ctl.get("value") != want:
                     return {"action": "type", "testid": tid, "text": want, "reason": "enter trip endpoint"}
+            step = self._stops_step(page)
+            if step:
+                return step
             for m in ALL_MODES:
                 ctl = _control(page, f"mode-toggle-{m}")
                 if ctl and (ctl.get("pressed") == "true") != (m in self.want_modes):
@@ -124,6 +153,9 @@ Actions run in order in the browser. Rules:
 - Use only testids listed in `controls`. Typing replaces the field's value. aria-pressed "true" means a toggle is ON.
 - You are only ever asked to plan the SETUP (planner_state is "idle"): type origin and destination, set the constraint
   toggles matching the user's facts (has_car, no_presto, ...), set bags and times - and END the plan with click compute-route.
+- If the request has `stops` (in visiting order, keep that order): click add-stop once per stop, type each name into
+  stop-N-input (N from 0), click stop-N-type-<type> for its type, and type its stay in minutes into stop-N-dwell
+  (not for via). Never reorder stops yourself; only click toggle-optimize_order when the request says optimize_order is true.
 - Turn ON every travel-mode toggle (mode-toggle-*) that is OFF, and never turn one off. All four bots search the same
   modes so their results are comparable; an action that turns a mode off is rejected, and so is computing while a mode
   or constraint still differs from the user's request.
@@ -205,6 +237,8 @@ class FallbackBrain:
         if self.gemini and page["state"] == "idle":
             try:
                 if not self.queue:
+                    if self.gemini_calls >= MAX_GEMINI_CALLS:
+                        raise ValueError("Gemini setup budget used up; the rule brain finishes the setup")
                     self.gemini_calls += 1
                     self.queue = await self.gemini.next_actions(page, history)
                     if not self.queue:
