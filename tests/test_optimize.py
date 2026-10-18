@@ -60,6 +60,16 @@ def test_ties_break_by_the_next_objectives_not_input_order():
     assert optimize.top("fastest", [b, a], {})["id"] == "b"
 
 
+def test_reliable_ties_break_by_faster_then_cheaper():
+    base = {"available": True, "duration_min": 40, "cost": 10, "co2_kg": 1}
+    a = {**base, "id": "a", "reliability": {"reliability_pct": 90, "history_days": 10}}
+    b = {**base, "id": "b", "duration_min": 25, "reliability": {"reliability_pct": 90, "history_days": 10}}  # faster, same pct
+    c = {**base, "id": "c", "duration_min": 25, "cost": 4, "reliability": {"reliability_pct": 90, "history_days": 10}}  # faster and cheaper
+    assert optimize.top("reliable", [a, b], {})["id"] == "b"       # tie on pct -> faster wins
+    assert optimize.top("reliable", [a, b, c], {})["id"] == "c"    # tie on pct and time -> cheaper wins
+    assert optimize.top("reliable", [c, b, a], {})["id"] == "c"    # order-independent
+
+
 def test_invariant_check_flags_a_wrong_pick():
     cands = [{"id": "slow", "available": True, "duration_min": 50, "cost": 1, "co2_kg": 0},
              {"id": "fast", "available": True, "duration_min": 20, "cost": 9, "co2_kg": 3}]
